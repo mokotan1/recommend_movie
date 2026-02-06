@@ -1,7 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_card_swiper/flutter_card_swiper.dart';
 
 void main() {
   runApp(const FigmaToCodeApp());
+}
+
+class Movie {
+  final String title;
+  final Color color;
+  Movie({required this.title, required this.color});
 }
 
 class FigmaToCodeApp extends StatelessWidget {
@@ -10,132 +17,127 @@ class FigmaToCodeApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      debugShowCheckedModeBanner: false, // 디버그 띠 제거
+      debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color.fromARGB(255, 18, 32, 47),
       ),
-      home: const MovieSwipeScreen(), // 이름 변경됨
+      home: const MovieSwipeScreen(),
     );
   }
 }
 
-// 클래스 이름을 Container에서 MovieSwipeScreen으로 변경하여 충돌 해결
-class MovieSwipeScreen extends StatelessWidget {
+class MovieSwipeScreen extends StatefulWidget {
   const MovieSwipeScreen({super.key});
 
   @override
+  State<MovieSwipeScreen> createState() => _MovieSwipeScreenState();
+}
+
+class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
+  final CardSwiperController controller = CardSwiperController();
+
+  final List<Movie> movies = [
+    Movie(title: '영화 1', color: Colors.redAccent),
+    Movie(title: '영화 2', color: Colors.blueAccent),
+    Movie(title: '영화 3', color: Colors.greenAccent),
+    Movie(title: '영화 4', color: Colors.orangeAccent),
+    Movie(title: '영화 5', color: Colors.purpleAccent),
+  ];
+
+  int watchedCount = 0;
+  int unwatchedCount = 0;
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    // 팁: ListView 대신 SafeArea를 써서 상단 노치 영역을 보호하세요.
     return Scaffold(
       body: SafeArea(
-        child: SingleChildScrollView(
-          child: Center( // 중앙 정렬 추가
-            child: Column(
+        child: Column(
+          children: [
+            const SizedBox(height: 40),
+            const Text(
+              'MovieSwipe Test',
+              style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold),
+            ),
+            const Text('좌우로 스와이프하여 영화를 골라보세요'),
+
+            Expanded(
+              child: CardSwiper(
+                controller: controller,
+                cardsCount: movies.length,
+
+                cardBuilder: (context, index) {
+                  return _buildMovieCard(movies[index]);
+                },
+
+                onSwipe: (previousIndex, currentIndex, direction) {
+                  setState(() {
+                    if (direction == CardSwiperDirection.right) {
+                      watchedCount++;
+                    } else if (direction == CardSwiperDirection.left) {
+                      unwatchedCount++;
+                    }
+                  });
+                },
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
+                isLoop: true,
+              ),
+            ),
+
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // 내부의 위젯들은 이제 플러터 공식 Container를 정상적으로 사용합니다.
-                Container(
-                  width: 448,
-                  padding: const EdgeInsets.symmetric(vertical: 20),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // 상단 타이틀 영역
-                      _buildHeader(),
-                      const SizedBox(height: 32),
-                      // 영화 카드 영역 (Stack)
-                      _buildMovieCard(),
-                      const SizedBox(height: 64),
-                      // 하단 컨트롤러 영역
-                      _buildControlButtons(),
-                      const SizedBox(height: 32),
-                      // 통계 영역
-                      _buildStats(),
-                    ],
-                  ),
-                ),
+                _actionButton(Colors.red, Icons.close, () => controller.swipeLeft()),
+                const SizedBox(width: 40),
+                _actionButton(Colors.blue, Icons.done, () => controller.swipeRight()),
               ],
             ),
-          ),
+            const SizedBox(height: 30),
+
+            Text(
+              '봤어요: $watchedCount  |  안 봤어요: $unwatchedCount',
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w500),
+            ),
+            const SizedBox(height: 40),
+          ],
         ),
       ),
     );
   }
 
-  // 가독성을 위해 위젯을 함수로 분리했습니다.
-  Widget _buildHeader() {
-    return Column(
-      children: [
-        const Text(
-          'MovieSwipe',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 48,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        Text(
-          '영화를 봤는지 스와이프하세요',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.8),
-            fontSize: 16,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildMovieCard() {
-    // 피그마에서 가져온 복잡한 Stack 구조를 이 자리에 넣으시면 됩니다.
-    // 현재는 간단한 예시로 대체합니다.
-    return Center(
-      child: Container(
-        width: 350,
-        height: 500,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(24),
-          image: const DecorationImage(
-            image: NetworkImage("https://placehold.co/350x500"),
-            fit: BoxFit.cover,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildControlButtons() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        _circleButton(Colors.red, Icons.close),
-        const SizedBox(width: 24),
-        _circleButton(Colors.blue, Icons.done),
-      ],
-    );
-  }
-
-  Widget _circleButton(Color color, IconData icon) {
+  Widget _buildMovieCard(Movie movie) {
     return Container(
-      width: 64,
-      height: 64,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        shape: BoxShape.circle,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: movie.color,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 10
+          )
+        ],
       ),
-      child: Icon(icon, color: color, size: 32),
+      child: Text(
+        movie.title,
+        style: const TextStyle(fontSize: 40, fontWeight: FontWeight.bold, color: Colors.white),
+      ),
     );
   }
 
-  Widget _buildStats() {
-    return const Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Column(children: [Text('남은 영화'), Text('7', style: TextStyle(fontSize: 24))]),
-        SizedBox(width: 32),
-        Column(children: [Text('봤어요'), Text('0', style: TextStyle(color: Colors.blue, fontSize: 24))]),
-        SizedBox(width: 32),
-        Column(children: [Text('안 봤어요'), Text('0', style: TextStyle(color: Colors.grey, fontSize: 24))]),
-      ],
+  Widget _actionButton(Color color, IconData icon, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 70, height: 70,
+        decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+        child: Icon(icon, color: color, size: 35),
+      ),
     );
   }
 }
