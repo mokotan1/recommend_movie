@@ -43,3 +43,13 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+<<<<<<< HEAD
+=======
+
+# 가상환경 폴더 제외
+backend_ai/venv/
+
+# 환경 변수 파일(API 키) 제외
+.env
+backend_ai/.env
+>>>>>>> 2a32d55217666feed3f52a28352162a74f20158c
