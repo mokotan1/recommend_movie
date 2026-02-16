@@ -50,7 +50,3 @@ backend_ai/venv/
 # 환경 변수 파일(API 키) 제외
 .env
 backend_ai/.env
-
-# Flutter 관련 자동 생성 파일들
-.packages
-build/
