@@ -1,121 +1,187 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_card_swiper/flutter_card_swiper.dart';
+import 'package:http/http.dart' as http; //
+import 'dart:convert';
 
 void main() {
-  runApp(const MyApp());
+  runApp(const FigmaToCodeApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class FigmaToCodeApp extends StatelessWidget {
+  const FigmaToCodeApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData.dark().copyWith(
+        scaffoldBackgroundColor: const Color.fromARGB(255, 18, 32, 47),
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: const MovieSwipeScreen(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+class MovieSwipeScreen extends StatefulWidget {
+  const MovieSwipeScreen({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<MovieSwipeScreen> createState() => _MovieSwipeScreenState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
+  final CardSwiperController controller = CardSwiperController();
+  List<dynamic> movies = []; // 백엔드에서 받을 영화 리스트
+  List<Map<String, dynamic>> userResponses = []; // 서버로 보낼 응답 데이터
+  bool isLoading = true;
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
+  @override
+  void initState() {
+    super.initState();
+    _fetchMoviesFromBackend(); // 앱 시작 시 백엔드 데이터 로드
+  }
+
+  // 1. 백엔드(main.py)에서 연령대별 영화 데이터 가져오기
+  Future<void> _fetchMoviesFromBackend() async {
+    try {
+      // 에뮬레이터에서 내 컴퓨터 백엔드 접속 주소 (40대 예시)
+      final response = await http.get(Uri.parse('http://10.0.2.2:8000/questions/40-49'));
+
+      if (response.statusCode == 200) {
+        setState(() {
+          movies = json.decode(response.body);
+          isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint("백엔드 연결 실패: $e");
+      setState(() => isLoading = false);
+    }
+  }
+
+  // 2. 스와이프 완료 후 백엔드에 취향 분석 요청
+  Future<void> _sendAnalysisRequest() async {
+    final response = await http.post(
+      Uri.parse('http://10.0.2.2:8000/recommend'),
+      headers: {"Content-Type": "application/json"},
+      body: json.encode(userResponses),
+    );
+
+    if (response.statusCode == 200) {
+      final result = json.decode(response.body);
+      _showResultDialog(result); // 결과 팝업 표시
+    }
+  }
+
+  void _showResultDialog(Map<String, dynamic> result) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text("취향 분석 완료! (${result['taste_analysis']['primary_factor']})"),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Image.network(result['recommendation']['poster_url'], height: 200),
+            const SizedBox(height: 10),
+            Text("추천 영화: ${result['recommendation']['title']}", style: const TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text("확인"))],
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
+    if (isLoading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    if (movies.isEmpty) return const Scaffold(body: Center(child: Text("서버 데이터를 확인할 수 없습니다.")));
+
     return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
+      body: SafeArea(
         child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
           children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+            const SizedBox(height: 20),
+            const Text('MovieSwipe AI', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+            const Text('본 영화는 오른쪽, 안 본 영화는 왼쪽으로!'),
+            Expanded(
+              child: CardSwiper(
+                controller: controller,
+                cardsCount: movies.length,
+                cardBuilder: (context, index, _, __) => _buildMovieCard(movies[index]),
+                onSwipe: (prev, curr, direction) {
+                  // 사용자의 선택 데이터 기록 (백엔드 전송용)
+                  userResponses.add({
+                    "user_id": "test_user", // 실제 연동 시 사용자 ID 사용
+                    "movie_id": movies[prev]['movie_id'],
+                    "title": movies[prev]['title'],
+                    "genre_ids": movies[prev]['genre_ids'],
+                    "actors": movies[prev]['actors'],
+                    "popularity": movies[prev]['popularity'],
+                    "vote_average": movies[prev]['vote_average'],
+                    "is_watched": direction == CardSwiperDirection.right
+                  });
+                  return true;
+                },
+                onEnd: () => _sendAnalysisRequest(), // 카드 다 넘기면 분석 요청
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 30),
+              ),
             ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _actionButton(Colors.red, Icons.close, () => controller.swipe(CardSwiperDirection.left)),
+                const SizedBox(width: 40),
+                _actionButton(Colors.blue, Icons.done, () => controller.swipe(CardSwiperDirection.right)),
+              ],
+            ),
+            const SizedBox(height: 30),
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
+    );
+  }
+
+  Widget _buildMovieCard(dynamic movie) {
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        image: DecorationImage(
+          image: NetworkImage(movie['poster_url']), // TMDB 실제 포스터 이미지
+          fit: BoxFit.cover,
+        ),
+      ),
+      child: Container(
+        alignment: Alignment.bottomCenter,
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(24),
+          gradient: const LinearGradient(
+            colors: [Colors.transparent, Colors.black87],
+            begin: Alignment.topCenter, end: Alignment.bottomCenter,
+          ),
+        ),
+        child: Text(
+          movie['title'],
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white),
+        ),
+      ),
+    );
+  }
+
+  Widget _actionButton(Color color, IconData icon, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 60, height: 60,
+        decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+        child: Icon(icon, color: color, size: 30),
       ),
     );
   }
