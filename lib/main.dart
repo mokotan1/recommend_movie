@@ -5,10 +5,20 @@ import 'dart:convert';
 import 'package:kakao_flutter_sdk/kakao_flutter_sdk.dart';
 import 'login_screen.dart';
 
-void main() {
+void main() async {
+  // Flutter 엔진 초기화 (비동기 함수 호출 전 필수)
+  WidgetsFlutterBinding.ensureInitialized();
+
   // 카카오 SDK 초기화 (네이티브 앱 키 필요 - 카카오 개발자 사이트에서 발급받은 키 입력)
+  // TODO: 여기에 실제 네이티브 앱 키를 넣으세요!
   KakaoSdk.init(nativeAppKey: 'YOUR_NATIVE_APP_KEY_HERE'); 
   
+  // [디버깅용] 현재 빌드의 키 해시(Key Hash)를 콘솔에 출력합니다.
+  // 이 값을 복사해서 카카오 디벨로퍼스 [플랫폼] > [Android] > [키 해시]에 등록하세요.
+  print('=== KAKAO KEY HASH START ===');
+  print(await KakaoSdk.origin); 
+  print('=== KAKAO KEY HASH END ===');
+
   runApp(const FigmaToCodeApp());
 }
 
