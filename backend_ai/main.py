@@ -1,18 +1,19 @@
 import os
 import sqlite3
 import httpx
+import random
 from typing import List, Dict
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 
-# 환경 변수 로드 (TMDB_API_KEY 저장 필요)
+# 환경 변수 로드
 load_dotenv()
 
-app = FastAPI(title="Movie Taste Analysis System")
+app = FastAPI(title="Korea-Released Masterpiece Recommend System")
 
-# 1. CORS 설정 (Flutter 연동 필수)
+# CORS 설정
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -76,7 +77,7 @@ async def login(data: SocialLogin):
 
 @app.get("/questions/{age_group}")
 async def get_movie_questions(age_group: str):
-    """연령대별 대표 영화 5편을 TMDB에서 가져와 질문으로 반환"""
+    """연령대별 대표 영화 10편을 한국 개봉작 중에서 '완전히 랜덤'하게 추출"""
     year_map = {"10-19": "2024", "20-29": "2018", "30-39": "2010", "40-49": "2003", "50-59": "1995", "60-69": "1985"}
     target_year = year_map.get(age_group, "2024")
 
@@ -84,18 +85,25 @@ async def get_movie_questions(age_group: str):
         params = {
             "api_key": TMDB_API_KEY,
             "language": "ko-KR",
-            "region": "KR",  # 한국 지역 제한
+            "region": "KR", # 한국 개봉작 조건 유지
             "primary_release_year": target_year,
-            "sort_by": "revenue.desc",  # 흥행(수익) 순 정렬
-            "page": 1
+            "vote_count.gte": 100, # 👉 무작위로 뽑더라도 최소한의 대중성 보장
+            "sort_by": "popularity.desc",
+            "page": random.randint(1, 40) # 👉 1~40페이지(약 800편)로 후보군 대폭 확장
         }
         response = await client.get(f"{BASE_URL}/discover/movie", params=params)
-        movies = response.json().get("results", [])[:5]
+        results = response.json().get("results", [])
+
+        # 👉 한 페이지(최대 20개) 내에서 10개를 완전히 무작위로 추출 및 순서 셔플
+        if len(results) >= 10:
+            movies = random.sample(results, 10)
+        else:
+            movies = results
 
         return [{
             "movie_id": m["id"],
             "title": m["title"],
-            "poster_url": f"https://image.tmdb.org/t/p/w500{m['poster_path']}",
+            "poster_url": f"https://image.tmdb.org/t/p/w500{m['poster_path']}" if m.get('poster_path') else "",
             "genre_ids": m["genre_ids"],
             "popularity": m["popularity"],
             "vote_average": m["vote_average"]
@@ -103,53 +111,63 @@ async def get_movie_questions(age_group: str):
 
 @app.post("/recommend")
 async def analyze_and_recommend(data: List[WatchAction]):
-    """사용자가 본 영화들을 분석하여 4가지 지표(장르, 배우, 화제성, 별점) 기반 추천"""
+    """분석된 취향으로 한국 개봉작 중 평점 8.0 이상의 명작 추천"""
     if not data:
         raise HTTPException(status_code=400, detail="응답 데이터가 없습니다.")
 
+    # 추천 시 방금 본 영화 제외를 위한 리스트
+    evaluated_movie_ids = {m.movie_id for m in data}
     watched_list = [m for m in data if m.is_watched]
 
-    # 1. 취향 지표 초기화
-    genre_counts = {}
-    total_pop = 0
-    total_vote = 0
+    # 기본 추천 조건: 한국 개봉작 + 평점 8.0 이상 + 투표수 500 이상
+    rec_params = {
+        "api_key": TMDB_API_KEY,
+        "language": "ko-KR",
+        "region": "KR",
+        "sort_by": "vote_count.desc",
+        "vote_count.gte": 500,
+        "vote_average.gte": 8.0
+    }
 
-    for m in watched_list:
-        total_pop += m.popularity
-        total_vote += m.vote_average
-        for gid in m.genre_ids:
-            genre_counts[gid] = genre_counts.get(gid, 0) + 1
-
-    # 2. 취향 분석
-    count = len(watched_list) if watched_list else 1
-    avg_pop = total_pop / count
-    avg_vote = total_vote / count
-    top_genre = max(genre_counts, key=genre_counts.get) if genre_counts else None
-
-    # 3. 분석 결과에 따른 추천 가중치 결정
-    # 별점 7.5 이상 선호 시 '작품성', 화제성 100 이상 선호 시 '트렌드'
-    if avg_vote > 7.5:
-        taste_type = "별점(작품성)"
-        sort_query = "vote_average.desc"
-    elif avg_pop > 100:
-        taste_type = "화제성(트렌드)"
-        sort_query = "popularity.desc"
+    if not watched_list:
+        # 전부 왼쪽 스와이프 시 처리
+        taste_type = "확고한 주관"
+        top_genre = None
+        avg_pop, avg_vote = 0.0, 0.0
     else:
-        taste_type = f"장르(ID:{top_genre})"
-        sort_query = "popularity.desc"
+        genre_counts = {}
+        total_pop, total_vote = 0, 0
 
-    # 4. 분석된 취향으로 TMDB 최종 추천 영화 1편 쿼리
+        for m in watched_list:
+            total_pop += m.popularity
+            total_vote += m.vote_average
+            for gid in m.genre_ids:
+                genre_counts[gid] = genre_counts.get(gid, 0) + 1
+
+        count = len(watched_list)
+        avg_pop = total_pop / count
+        avg_vote = total_vote / count
+        top_genre = max(genre_counts, key=genre_counts.get) if genre_counts else None
+        taste_type = "선호 장르 명작"
+
     async with httpx.AsyncClient() as client:
-        rec_params = {
-            "api_key": TMDB_API_KEY,
-            "language": "ko-KR",
-            "region": "KR",  # 한국 지역 제한
-            "with_genres": top_genre,
-            "sort_by": sort_query,
-            "vote_count.gte": 100 # 한국 기준이므로 투표 수 제한 하향
-        }
+        if top_genre:
+            rec_params["with_genres"] = top_genre
+
         res = await client.get(f"{BASE_URL}/discover/movie", params=rec_params)
-        final_movie = res.json().get("results", [])[0]
+        results = res.json().get("results", [])
+
+        # 방금 질문으로 나온 영화들은 추천 결과에서 깔끔하게 제외
+        filtered = [m for m in results if m["id"] not in evaluated_movie_ids]
+
+        if filtered:
+            # 상위 15개 추천작 중 랜덤하게 골라 매번 색다른 결과 제공
+            final_movie = random.choice(filtered[:15])
+        else:
+            final_movie = results[0] if results else None
+
+    if not final_movie:
+        raise HTTPException(status_code=404, detail="추천 영화를 찾을 수 없습니다.")
 
     return {
         "taste_analysis": {
@@ -160,7 +178,8 @@ async def analyze_and_recommend(data: List[WatchAction]):
         "recommendation": {
             "title": final_movie["title"],
             "overview": final_movie["overview"],
-            "poster_url": f"https://image.tmdb.org/t/p/w500{final_movie['poster_path']}"
+            "release_date": final_movie.get("release_date", "미정"),
+            "poster_url": f"https://image.tmdb.org/t/p/w500{final_movie['poster_path']}" if final_movie.get('poster_path') else ""
         }
     }
 
