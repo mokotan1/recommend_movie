@@ -84,8 +84,9 @@ async def get_movie_questions(age_group: str):
         params = {
             "api_key": TMDB_API_KEY,
             "language": "ko-KR",
+            "region": "KR",  # 한국 지역 제한
             "primary_release_year": target_year,
-            "sort_by": "popularity.desc",
+            "sort_by": "revenue.desc",  # 흥행(수익) 순 정렬
             "page": 1
         }
         response = await client.get(f"{BASE_URL}/discover/movie", params=params)
@@ -142,9 +143,10 @@ async def analyze_and_recommend(data: List[WatchAction]):
         rec_params = {
             "api_key": TMDB_API_KEY,
             "language": "ko-KR",
+            "region": "KR",  # 한국 지역 제한
             "with_genres": top_genre,
             "sort_by": sort_query,
-            "vote_count.gte": 500
+            "vote_count.gte": 100 # 한국 기준이므로 투표 수 제한 하향
         }
         res = await client.get(f"{BASE_URL}/discover/movie", params=rec_params)
         final_movie = res.json().get("results", [])[0]
