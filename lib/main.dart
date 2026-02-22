@@ -11,7 +11,7 @@ void main() async {
 
   // 카카오 SDK 초기화 (네이티브 앱 키 필요 - 카카오 개발자 사이트에서 발급받은 키 입력)
   // TODO: 여기에 실제 네이티브 앱 키를 넣으세요!
-  KakaoSdk.init(nativeAppKey: '네이티브 키 입력');
+  KakaoSdk.init(nativeAppKey: 'a392d68a91bde52cb94501eeaa9bcf1f');
   
   // [디버깅용] 현재 빌드의 키 해시(Key Hash)를 콘솔에 출력합니다.
   // 이 값을 복사해서 카카오 디벨로퍼스 [플랫폼] > [Android] > [키 해시]에 등록하세요.
