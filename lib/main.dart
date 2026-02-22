@@ -4,7 +4,6 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:kakao_flutter_sdk/kakao_flutter_sdk.dart';
 import 'login_screen.dart';
-
 void main() async {
   // Flutter 엔진 초기화 (비동기 호출 위해 필요)
   WidgetsFlutterBinding.ensureInitialized();
