@@ -1,9 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_card_swiper/flutter_card_swiper.dart';
-import 'package:http/http.dart' as http; //
+import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:kakao_flutter_sdk/kakao_flutter_sdk.dart';
+import 'login_screen.dart';
 
-void main() {
+void main() async {
+  // Flutter 엔진 초기화 (비동기 호출 위해 필요)
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // 카카오 SDK 초기화 (네이티브 앱 키 필요 - 카카오 개발자 사이트에서 발급받은 키 입력)
+  // TODO: 실제 앱 키는 보안상 제외함. 로컬 실행 시 키를 입력하세요.
+  KakaoSdk.init(nativeAppKey: 'YOUR_NATIVE_APP_KEY_HERE');  
+
+  // 디버그용: 키 해시 출력 (로그 확인 후 카카오 개발자 콘솔에 등록)
+  try {
+    print('Key Hash: ${await KakaoSdk.origin}');
+  } catch (e) {
+    print('Key Hash Error: $e');
+  }
+  
   runApp(const FigmaToCodeApp());
 }
 
@@ -17,13 +33,15 @@ class FigmaToCodeApp extends StatelessWidget {
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color.fromARGB(255, 18, 32, 47),
       ),
-      home: const MovieSwipeScreen(),
+      home: const LoginScreen(), // 로그인 화면을 시작 화면으로 변경
     );
   }
 }
 
 class MovieSwipeScreen extends StatefulWidget {
-  const MovieSwipeScreen({super.key});
+  final int userAge; // 로그인 화면에서 전달받을 나이 (기본값 20)
+
+  const MovieSwipeScreen({super.key, this.userAge = 20});
 
   @override
   State<MovieSwipeScreen> createState() => _MovieSwipeScreenState();
@@ -44,8 +62,12 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
   // 1. 백엔드(main.py)에서 연령대별 영화 데이터 가져오기
   Future<void> _fetchMoviesFromBackend() async {
     try {
-      // 에뮬레이터에서 내 컴퓨터 백엔드 접속 주소 (40대 예시)
-      final response = await http.get(Uri.parse('http://10.0.2.2:8000/questions/40-49'));
+      // 전달받은 나이(userAge)를 기반으로 API 호출 URL 변경
+      // 예: 20 -> "20-29", 30 -> "30-39"
+      String ageQuery = "${widget.userAge}-${widget.userAge + 9}";
+
+      // 에뮬레이터에서 내 컴퓨터 백엔드 접속 주소
+      final response = await http.get(Uri.parse('http://10.0.2.2:8000/questions/$ageQuery'));
 
       if (response.statusCode == 200) {
         setState(() {
@@ -69,7 +91,7 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
 
     if (response.statusCode == 200) {
       final result = json.decode(response.body);
-      _showResultDialog(result); // 결과 팝업 표시
+      if (mounted) _showResultDialog(result); // 결과 팝업 표시
     }
   }
 
@@ -81,7 +103,8 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Image.network(result['recommendation']['poster_url'], height: 200),
+            if (result['recommendation']['poster_url'] != null)
+              Image.network(result['recommendation']['poster_url'], height: 200),
             const SizedBox(height: 10),
             Text("추천 영화: ${result['recommendation']['title']}", style: const TextStyle(fontWeight: FontWeight.bold)),
           ],
@@ -107,7 +130,7 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
         child: Column(
           children: [
             const SizedBox(height: 20),
-            const Text('MovieSwipe AI', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+            Text('MovieSwipe AI (${widget.userAge}대)', style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
             const Text('본 영화는 오른쪽, 안 본 영화는 왼쪽으로!'),
             Expanded(
               child: CardSwiper(
