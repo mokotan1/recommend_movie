@@ -1,18 +1,18 @@
 import os
 import sqlite3
 import httpx
+import random
+import asyncio # 병렬 처리를 위해 추가된 모듈
 from typing import List, Dict
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 
-# 환경 변수 로드 (TMDB_API_KEY 저장 필요)
 load_dotenv()
 
-app = FastAPI(title="Movie Taste Analysis System")
+app = FastAPI(title="Advanced Movie Recommend System")
 
-# 1. CORS 설정 (Flutter 연동 필수)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,7 +20,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- 설정 및 DB 초기화 ---
 TMDB_API_KEY = os.getenv("TMDB_API_KEY")
 BASE_URL = "https://api.themoviedb.org/3"
 DB_PATH = "movie_app.db"
@@ -28,32 +27,10 @@ DB_PATH = "movie_app.db"
 def init_db():
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                user_id TEXT PRIMARY KEY,
-                age_group TEXT
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS watched_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT,
-                movie_id INTEGER,
-                title TEXT,
-                genre_ids TEXT,
-                popularity REAL,
-                vote_average REAL,
-                FOREIGN KEY (user_id) REFERENCES users (user_id)
-            )
-        ''')
+        cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id TEXT PRIMARY KEY, age_group TEXT)')
         conn.commit()
 
 init_db()
-
-# --- 데이터 모델 ---
-class SocialLogin(BaseModel):
-    user_id: str
-    age_group: str
 
 class WatchAction(BaseModel):
     user_id: str
@@ -64,19 +41,8 @@ class WatchAction(BaseModel):
     vote_average: float
     is_watched: bool
 
-# --- API 엔드포인트 ---
-
-@app.post("/login")
-async def login(data: SocialLogin):
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO users (user_id, age_group) VALUES (?, ?)",
-                       (data.user_id, data.age_group))
-    return {"status": "success", "age_group": data.age_group}
-
 @app.get("/questions/{age_group}")
 async def get_movie_questions(age_group: str):
-    """연령대별 대표 영화 5편을 TMDB에서 가져와 질문으로 반환"""
     year_map = {"10-19": "2024", "20-29": "2018", "30-39": "2010", "40-49": "2003", "50-59": "1995", "60-69": "1985"}
     target_year = year_map.get(age_group, "2024")
 
@@ -84,17 +50,24 @@ async def get_movie_questions(age_group: str):
         params = {
             "api_key": TMDB_API_KEY,
             "language": "ko-KR",
+            "region": "KR",
             "primary_release_year": target_year,
+            "vote_count.gte": 100,
             "sort_by": "popularity.desc",
-            "page": 1
+            "page": random.randint(1, 40)
         }
         response = await client.get(f"{BASE_URL}/discover/movie", params=params)
-        movies = response.json().get("results", [])[:5]
+        results = response.json().get("results", [])
+
+        if len(results) >= 10:
+            movies = random.sample(results, 10)
+        else:
+            movies = results
 
         return [{
             "movie_id": m["id"],
             "title": m["title"],
-            "poster_url": f"https://image.tmdb.org/t/p/w500{m['poster_path']}",
+            "poster_url": f"https://image.tmdb.org/t/p/w500{m['poster_path']}" if m.get('poster_path') else "",
             "genre_ids": m["genre_ids"],
             "popularity": m["popularity"],
             "vote_average": m["vote_average"]
@@ -102,63 +75,120 @@ async def get_movie_questions(age_group: str):
 
 @app.post("/recommend")
 async def analyze_and_recommend(data: List[WatchAction]):
-    """사용자가 본 영화들을 분석하여 4가지 지표(장르, 배우, 화제성, 별점) 기반 추천"""
     if not data:
-        raise HTTPException(status_code=400, detail="응답 데이터가 없습니다.")
+        raise HTTPException(status_code=400, detail="데이터가 없습니다.")
 
+    evaluated_movie_ids = {m.movie_id for m in data}
     watched_list = [m for m in data if m.is_watched]
 
-    # 1. 취향 지표 초기화
-    genre_counts = {}
-    total_pop = 0
-    total_vote = 0
+    rec_params = {
+        "api_key": TMDB_API_KEY,
+        "language": "ko-KR",
+        "region": "KR",
+        "sort_by": "vote_count.desc",
+        "vote_count.gte": 500,
+        "vote_average.gte": 8.0
+    }
 
-    for m in watched_list:
-        total_pop += m.popularity
-        total_vote += m.vote_average
-        for gid in m.genre_ids:
-            genre_counts[gid] = genre_counts.get(gid, 0) + 1
+    taste_type = "선호 장르 명작"
+    avg_pop, avg_vote = 0.0, 0.0
 
-    # 2. 취향 분석
-    count = len(watched_list) if watched_list else 1
-    avg_pop = total_pop / count
-    avg_vote = total_vote / count
-    top_genre = max(genre_counts, key=genre_counts.get) if genre_counts else None
-
-    # 3. 분석 결과에 따른 추천 가중치 결정
-    # 별점 7.5 이상 선호 시 '작품성', 화제성 100 이상 선호 시 '트렌드'
-    if avg_vote > 7.5:
-        taste_type = "별점(작품성)"
-        sort_query = "vote_average.desc"
-    elif avg_pop > 100:
-        taste_type = "화제성(트렌드)"
-        sort_query = "popularity.desc"
-    else:
-        taste_type = f"장르(ID:{top_genre})"
-        sort_query = "popularity.desc"
-
-    # 4. 분석된 취향으로 TMDB 최종 추천 영화 1편 쿼리
     async with httpx.AsyncClient() as client:
-        rec_params = {
-            "api_key": TMDB_API_KEY,
-            "language": "ko-KR",
-            "with_genres": top_genre,
-            "sort_by": sort_query,
-            "vote_count.gte": 500
-        }
+        if not watched_list:
+            taste_type = "확고한 주관"
+            top_genre = None
+        else:
+            # 1. 장르, 인기도, 평점 분석
+            genre_counts = {}
+            total_pop, total_vote = 0, 0
+            for m in watched_list:
+                total_pop += m.popularity
+                total_vote += m.vote_average
+                for gid in m.genre_ids:
+                    genre_counts[gid] = genre_counts.get(gid, 0) + 1
+
+            count = len(watched_list)
+            avg_pop, avg_vote = total_pop / count, total_vote / count
+            top_genre = max(genre_counts, key=genre_counts.get) if genre_counts else None
+
+            # 배우 및 감독 데이터 수집 로직 (신규 핵심 기능)
+            async def fetch_credits(movie_id):
+                res = await client.get(f"{BASE_URL}/movie/{movie_id}/credits", params={"api_key": TMDB_API_KEY, "language": "ko-KR"})
+                return res.json() if res.status_code == 200 else {}
+
+            # 스와이프한 모든 영화의 출연진 정보를 동시에 긁어옴
+            tasks = [fetch_credits(m.movie_id) for m in watched_list]
+            credits_data = await asyncio.gather(*tasks)
+
+            actor_counts = {}
+            director_counts = {}
+
+            for credits in credits_data:
+                # 영화별 주연급 배우 상위 5명 추출
+                for cast in credits.get("cast", [])[:5]:
+                    a_id = cast["id"]
+                    actor_counts[a_id] = actor_counts.get(a_id, {"count": 0, "name": cast["name"]})
+                    actor_counts[a_id]["count"] += 1
+
+                # 감독 추출
+                for crew in credits.get("crew", []):
+                    if crew["job"] == "Director":
+                        d_id = crew["id"]
+                        director_counts[d_id] = director_counts.get(d_id, {"count": 0, "name": crew["name"]})
+                        director_counts[d_id]["count"] += 1
+
+            # 가장 많이 겹치는 배우/감독 도출
+            top_actor = max(actor_counts.values(), key=lambda x: x["count"], default={"count": 0}) if actor_counts else {"count": 0}
+            top_director = max(director_counts.values(), key=lambda x: x["count"], default={"count": 0}) if director_counts else {"count": 0}
+
+            top_actor_id = max(actor_counts, key=lambda k: actor_counts[k]["count"]) if actor_counts else None
+            top_director_id = max(director_counts, key=lambda k: director_counts[k]["count"]) if director_counts else None
+
+            # 감독이나 배우가 2번 이상 겹치면 그 인물을 기반으로 추천!
+            if top_director["count"] >= 2:
+                taste_type = f"'{top_director['name']}' 감독 마니아"
+                rec_params["with_crew"] = top_director_id
+                rec_params["vote_average.gte"] = 7.0 # 특정 인물 조건이 붙으면 결과가 안 나올 수 있으므로 평점 완화
+            elif top_actor["count"] >= 2:
+                taste_type = f"'{top_actor['name']}' 배우 팬"
+                rec_params["with_cast"] = top_actor_id
+                rec_params["vote_average.gte"] = 7.0
+            elif top_genre:
+                rec_params["with_genres"] = top_genre
+
+        # 최종 추천 쿼리 날리기
         res = await client.get(f"{BASE_URL}/discover/movie", params=rec_params)
-        final_movie = res.json().get("results", [])[0]
+        results = res.json().get("results", [])
+
+        filtered = [m for m in results if m["id"] not in evaluated_movie_ids]
+
+        # 특정 배우로 검색했는데 볼만한 영화가 없으면 장르로 재검색
+        if not filtered and ("with_cast" in rec_params or "with_crew" in rec_params):
+            rec_params.pop("with_cast", None)
+            rec_params.pop("with_crew", None)
+            rec_params["vote_average.gte"] = 8.0 # 다시 8.0 명작 기준으로 복귀
+            if top_genre: rec_params["with_genres"] = top_genre
+
+            res = await client.get(f"{BASE_URL}/discover/movie", params=rec_params)
+            results = res.json().get("results", [])
+            filtered = [m for m in results if m["id"] not in evaluated_movie_ids]
+            taste_type = "선호 장르 명작" # 멘트도 원래대로 복구
+
+        if filtered:
+            final_movie = random.choice(filtered[:15])
+        else:
+            final_movie = results[0] if results else None
+
+    if not final_movie:
+        raise HTTPException(status_code=404, detail="추천 영화를 찾을 수 없습니다.")
 
     return {
-        "taste_analysis": {
-            "primary_factor": taste_type,
-            "avg_popularity": round(avg_pop, 2),
-            "avg_rating": round(avg_vote, 2)
-        },
+        "taste_analysis": {"primary_factor": taste_type, "avg_popularity": round(avg_pop, 2), "avg_rating": round(avg_vote, 2)},
         "recommendation": {
             "title": final_movie["title"],
             "overview": final_movie["overview"],
-            "poster_url": f"https://image.tmdb.org/t/p/w500{final_movie['poster_path']}"
+            "release_date": final_movie.get("release_date", "미정"),
+            "poster_url": f"https://image.tmdb.org/t/p/w500{final_movie['poster_path']}" if final_movie.get('poster_path') else ""
         }
     }
 

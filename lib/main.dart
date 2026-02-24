@@ -1,24 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; //앱 종료(SystemNavigator)를 위해 추가된 패키지
 import 'package:flutter_card_swiper/flutter_card_swiper.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:kakao_flutter_sdk/kakao_flutter_sdk.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'login_screen.dart';
 
 void main() async {
-  // Flutter 엔진 초기화 (비동기 함수 호출 전 필수)
+  // Flutter 엔진 초기화 (비동기 호출 위해 필요)
   WidgetsFlutterBinding.ensureInitialized();
-
+  
   // 카카오 SDK 초기화 (네이티브 앱 키 필요 - 카카오 개발자 사이트에서 발급받은 키 입력)
   // TODO: 여기에 실제 네이티브 앱 키를 넣으세요!
-  KakaoSdk.init(nativeAppKey: '');
-
-  // [디버깅용] 현재 빌드의 키 해시(Key Hash)를 콘솔에 출력합니다.
-  // 이 값을 복사해서 카카오 디벨로퍼스 [플랫폼] > [Android] > [키 해시]에 등록하세요.
-  print('=== KAKAO KEY HASH START ===');
-  print(await KakaoSdk.origin);
-  print('=== KAKAO KEY HASH END ===');
-
+  KakaoSdk.init(nativeAppKey: 'a392d68a91bde52cb94501eeaa9bcf1f');
+  
   runApp(const FigmaToCodeApp());
 }
 
@@ -32,14 +28,13 @@ class FigmaToCodeApp extends StatelessWidget {
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color.fromARGB(255, 18, 32, 47),
       ),
-      home: const LoginScreen(), // 로그인 화면을 시작 화면으로 변경
+      home: const LoginScreen(),
     );
   }
 }
 
 class MovieSwipeScreen extends StatefulWidget {
-  final int userAge; // 로그인 화면에서 전달받을 나이 (기본값 20)
-
+  final int userAge;
   const MovieSwipeScreen({super.key, this.userAge = 20});
 
   @override
@@ -48,25 +43,22 @@ class MovieSwipeScreen extends StatefulWidget {
 
 class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
   final CardSwiperController controller = CardSwiperController();
-  List<dynamic> movies = []; // 백엔드에서 받을 영화 리스트
-  List<Map<String, dynamic>> userResponses = []; // 서버로 보낼 응답 데이터
+  List<dynamic> movies = [];
+  List<Map<String, dynamic>> userResponses = [];
   bool isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _fetchMoviesFromBackend(); // 앱 시작 시 백엔드 데이터 로드
+    _fetchMoviesFromBackend();
   }
 
-  // 1. 백엔드(main.py)에서 연령대별 영화 데이터 가져오기
   Future<void> _fetchMoviesFromBackend() async {
     try {
-      // 전달받은 나이(userAge)를 기반으로 API 호출 URL 변경
-      // 예: 20 -> "20-29", 30 -> "30-39"
       String ageQuery = "${widget.userAge}-${widget.userAge + 9}";
+      String timestamp = DateTime.now().millisecondsSinceEpoch.toString();
 
-      // 에뮬레이터에서 내 컴퓨터 백엔드 접속 주소
-      final response = await http.get(Uri.parse('http://10.0.2.2:8000/questions/$ageQuery'));
+      final response = await http.get(Uri.parse('http://10.0.2.2:8000/questions/$ageQuery?t=$timestamp'));
 
       if (response.statusCode == 200) {
         setState(() {
@@ -75,12 +67,11 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
         });
       }
     } catch (e) {
-      debugPrint("백엔드 연결 실패: $e");
+      debugPrint("데이터 로드 실패: $e");
       setState(() => isLoading = false);
     }
   }
 
-  // 2. 스와이프 완료 후 백엔드에 취향 분석 요청
   Future<void> _sendAnalysisRequest() async {
     final response = await http.post(
       Uri.parse('http://10.0.2.2:8000/recommend'),
@@ -90,80 +81,197 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
 
     if (response.statusCode == 200) {
       final result = json.decode(response.body);
-      if (mounted) _showResultDialog(result); // 결과 팝업 표시
+      if (mounted) _showResultDialog(result);
     }
   }
 
-  void _showResultDialog(Map<String, dynamic> result) {
-    showDialog(
+  // 앱 종료 확인 팝업창 띄우기 함수
+  Future<bool> _showExitConfirmation() async {
+    return await showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text("취향 분석 완료! (${result['taste_analysis']['primary_factor']})"),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (result['recommendation']['poster_url'] != null)
-              Image.network(result['recommendation']['poster_url'], height: 200),
-            const SizedBox(height: 10),
-            Text("추천 영화: ${result['recommendation']['title']}", style: const TextStyle(fontWeight: FontWeight.bold)),
-          ],
+        backgroundColor: const Color(0xFF1C273D),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        title: const Text("앱 종료", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: const Text("어플리케이션을 종료하시겠습니까?", style: TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false), // 취소 시 false 반환
+            child: const Text("취소", style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => SystemNavigator.pop(), // 진짜 앱 종료 코드
+            child: const Text("종료", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    ) ?? false;
+  }
+
+  void _showResultDialog(Map<String, dynamic> result) {
+    String tasteType = result['taste_analysis']['primary_factor'];
+
+    String specialMessage = (tasteType == "확고한 주관")
+        ? "취향이 아주 확고하시네요!\n당신을 위해 한국에서 사랑받은 최고의 명작을 골라왔어요."
+        : "당신의 취향을 저격할 인생 영화입니다.";
+
+    String overview = result['recommendation']['overview'] ?? "";
+    if (overview.isEmpty) overview = "줄거리 정보가 제공되지 않는 영화입니다.";
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1C273D),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text("분석 완료!\n($tasteType)",
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(specialMessage, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70)),
+              const SizedBox(height: 15),
+              if (result['recommendation']['poster_url'] != "")
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(15),
+                  child: Image.network(result['recommendation']['poster_url'], height: 220, fit: BoxFit.cover),
+                ),
+              const SizedBox(height: 15),
+              Text(result['recommendation']['title'],
+                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.cyanAccent),
+                  textAlign: TextAlign.center),
+              const SizedBox(height: 5),
+              Text("개봉 연도: ${result['recommendation']['release_date'].toString().split('-')[0]}년",
+                  style: const TextStyle(color: Colors.grey, fontSize: 13)),
+              const SizedBox(height: 15),
+              Container(
+                constraints: const BoxConstraints(maxHeight: 100),
+                padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+                decoration: BoxDecoration(
+                  color: Colors.black26,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: SingleChildScrollView(
+                  child: Text(
+                    overview,
+                    style: const TextStyle(color: Colors.white60, fontSize: 13, height: 1.4),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
-        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text("확인"))],
+        actions: [
+          Center(
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.cyan),
+              onPressed: () {
+                Navigator.pop(context);
+                setState(() {
+                  isLoading = true;
+                  userResponses.clear();
+                });
+                _fetchMoviesFromBackend();
+              },
+              child: const Text("다시 하기", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+            ),
+          )
+        ],
       ),
     );
   }
 
-  @override
-  void dispose() {
-    controller.dispose();
-    super.dispose();
+  Future<void> _logout(BuildContext context) async {
+    try {
+      await GoogleSignIn().signOut();
+      try { if (await AuthApi.instance.hasToken()) await UserApi.instance.logout(); } catch (_) {}
+      if (context.mounted) {
+        Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (context) => const LoginScreen()), (route) => false);
+      }
+    } catch (e) { debugPrint('로그아웃 실패: $e'); }
   }
 
   @override
   Widget build(BuildContext context) {
     if (isLoading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    if (movies.isEmpty) return const Scaffold(body: Center(child: Text("서버 데이터를 확인할 수 없습니다.")));
 
-    return Scaffold(
-      body: SafeArea(
-        child: Column(
-          children: [
-            const SizedBox(height: 20),
-            Text('MovieSwipe AI (${widget.userAge}대)', style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
-            const Text('본 영화는 오른쪽, 안 본 영화는 왼쪽으로!'),
-            Expanded(
-              child: CardSwiper(
-                controller: controller,
-                cardsCount: movies.length,
-                cardBuilder: (context, index, _, __) => _buildMovieCard(movies[index]),
-                onSwipe: (prev, curr, direction) {
-                  // 사용자의 선택 데이터 기록 (백엔드 전송용)
-                  userResponses.add({
-                    "user_id": "test_user", // 실제 연동 시 사용자 ID 사용
-                    "movie_id": movies[prev]['movie_id'],
-                    "title": movies[prev]['title'],
-                    "genre_ids": movies[prev]['genre_ids'],
-                    "actors": movies[prev]['actors'],
-                    "popularity": movies[prev]['popularity'],
-                    "vote_average": movies[prev]['vote_average'],
-                    "is_watched": direction == CardSwiperDirection.right
-                  });
-                  return true;
-                },
-                onEnd: () => _sendAnalysisRequest(), // 카드 다 넘기면 분석 요청
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 30),
+    // 💡 PopScope: 안드로이드 기기의 '뒤로 가기' 버튼을 제어하여 실수로 앱이 꺼지는 것을 방지
+    return PopScope(
+      canPop: false,
+      onPopInvoked: (didPop) async {
+        if (didPop) return;
+        final shouldExit = await _showExitConfirmation();
+        if (shouldExit) {
+          SystemNavigator.pop();
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          // 💡 좌측 상단에 종료 버튼 (전원 아이콘) 추가
+          leading: IconButton(
+            icon: const Icon(Icons.power_settings_new, color: Colors.redAccent, size: 28),
+            onPressed: () => _showExitConfirmation(),
+            tooltip: '앱 종료',
+          ),
+          actions: [
+            Padding(
+              padding: const EdgeInsets.only(right: 16.0),
+              child: GestureDetector(
+                onTap: () => _logout(context),
+                child: const Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.logout, color: Colors.white, size: 24),
+                    SizedBox(height: 4),
+                    Text('로그아웃', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+                  ],
+                ),
               ),
             ),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _actionButton(Colors.red, Icons.close, () => controller.swipe(CardSwiperDirection.left)),
-                const SizedBox(width: 40),
-                _actionButton(Colors.blue, Icons.done, () => controller.swipe(CardSwiperDirection.right)),
-              ],
-            ),
-            const SizedBox(height: 30),
           ],
+        ),
+        body: SafeArea(
+          child: Column(
+            children: [
+              Text('MovieSwipe AI (${widget.userAge}대)', style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+              const Text('한국에서 사랑받은 명작들을 스와이프하세요!'),
+              Expanded(
+                child: CardSwiper(
+                  key: ValueKey(movies.hashCode),
+                  controller: controller,
+                  cardsCount: movies.length,
+                  cardBuilder: (context, index, _, __) => _buildMovieCard(movies[index]),
+                  onSwipe: (prev, curr, direction) {
+                    userResponses.add({
+                      "user_id": "test_user", "movie_id": movies[prev]['movie_id'],
+                      "title": movies[prev]['title'], "genre_ids": movies[prev]['genre_ids'],
+                      "popularity": movies[prev]['popularity'], "vote_average": movies[prev]['vote_average'],
+                      "is_watched": direction == CardSwiperDirection.right
+                    });
+                    return true;
+                  },
+                  onEnd: () => _sendAnalysisRequest(),
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 30),
+                ),
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _actionButton(Colors.red, Icons.close, () => controller.swipe(CardSwiperDirection.left)),
+                  const SizedBox(width: 40),
+                  _actionButton(Colors.blue, Icons.done, () => controller.swipe(CardSwiperDirection.right)),
+                ],
+              ),
+              const SizedBox(height: 30),
+            ],
+          ),
         ),
       ),
     );
@@ -173,26 +281,16 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(24),
-        image: DecorationImage(
-          image: NetworkImage(movie['poster_url']), // TMDB 실제 포스터 이미지
-          fit: BoxFit.cover,
-        ),
+        image: DecorationImage(image: NetworkImage(movie['poster_url']), fit: BoxFit.cover),
       ),
       child: Container(
         alignment: Alignment.bottomCenter,
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(24),
-          gradient: const LinearGradient(
-            colors: [Colors.transparent, Colors.black87],
-            begin: Alignment.topCenter, end: Alignment.bottomCenter,
-          ),
+          gradient: const LinearGradient(colors: [Colors.transparent, Colors.black87], begin: Alignment.topCenter, end: Alignment.bottomCenter),
         ),
-        child: Text(
-          movie['title'],
-          textAlign: TextAlign.center,
-          style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white),
-        ),
+        child: Text(movie['title'], textAlign: TextAlign.center, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.white)),
       ),
     );
   }
