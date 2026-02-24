@@ -14,11 +14,11 @@ dependencies:
   # 기본 아이콘 패키지
   cupertino_icons: ^1.0.8
 
-  # --- [추가된 패키지] ---
   http: ^1.2.0
   flutter_card_swiper: ^7.0.0
   google_sign_in: ^6.2.1
   kakao_flutter_sdk: ^1.9.0
+  url_launcher: ^6.3.0
 
 dev_dependencies:
   flutter_test:
