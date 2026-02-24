@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:kakao_flutter_sdk/kakao_flutter_sdk.dart';
 import 'package:google_sign_in/google_sign_in.dart';
-import 'main.dart'; // MovieSwipeScreen으로 이동하기 위해 import
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'main.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -17,6 +19,32 @@ class _LoginScreenState extends State<LoginScreen> {
   );
 
   bool _isSigningIn = false;
+
+  // [핵심 추가] 파이썬 백엔드로 유저 정보를 보내고 고유 DB 아이디(순번)를 받아오는 함수
+  Future<String?> _sendLoginDataToBackend(String socialId, String provider, String ageGroup) async {
+    try {
+      final response = await http.post(
+        Uri.parse('http://192.168.45.142:8000/login'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({
+          "user_id": socialId,
+          "social_provider": provider,
+          "age_group": ageGroup,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        return data['user_sequence_id'].toString(); // DB에서 발급해준 순번 (예: "1", "2")
+      } else {
+        debugPrint("서버 에러: ${response.statusCode}");
+        return null;
+      }
+    } catch (e) {
+      debugPrint("네트워크 에러: $e");
+      return null;
+    }
+  }
 
   // 카카오 로그인 함수
   Future<void> _loginWithKakao() async {
@@ -37,16 +65,34 @@ class _LoginScreenState extends State<LoginScreen> {
         token = await UserApi.instance.loginWithKakaoAccount();
       }
 
+      // 유저 정보 가져오기
       User user = await UserApi.instance.me();
+      String socialId = user.id.toString(); // 카카오 고유 아이디
       String? ageRangeStr = user.kakaoAccount?.ageRange?.toString();
 
-      _navigateToMain(ageRangeStr);
-      // 성공 시 화면을 이동하므로 여기서 함수가 종료됩니다. (setState 필요 없음)
+      String ageGroup = "20-29"; // 기본값
+      if (ageRangeStr != null) {
+        if (ageRangeStr.contains('10') || ageRangeStr.contains('15')) ageGroup = "10-19";
+        else if (ageRangeStr.contains('20')) ageGroup = "20-29";
+        else if (ageRangeStr.contains('30')) ageGroup = "30-39";
+        else if (ageRangeStr.contains('40')) ageGroup = "40-49";
+        else if (ageRangeStr.contains('50')) ageGroup = "50-59";
+      }
+
+      // 백엔드에 정보 저장 후 고유 DB 순번 받아오기
+      String? dbUserId = await _sendLoginDataToBackend(socialId, "kakao", ageGroup);
+
+      if (dbUserId != null) {
+        _navigateToMain(ageGroup, dbUserId);
+      } else {
+        _showError('서버 연결에 실패했습니다.');
+        if (mounted) setState(() => _isSigningIn = false);
+      }
 
     } catch (error) {
       debugPrint('카카오 로그인 실패: $error');
       _showError('카카오 로그인에 실패했습니다.');
-      if (mounted) setState(() => _isSigningIn = false); // 에러 발생 시 로딩 끄기
+      if (mounted) setState(() => _isSigningIn = false);
     }
   }
 
@@ -57,33 +103,42 @@ class _LoginScreenState extends State<LoginScreen> {
       final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
 
       if (googleUser == null) {
-        // 사용자가 뒤로가기 등으로 로그인을 취소한 경우
         if (mounted) setState(() => _isSigningIn = false);
         return;
       }
 
-      // 로그인 성공 시 메인으로 이동
-      _navigateToMain(null);
+      String socialId = googleUser.id;
+      String ageGroup = "20-29"; // 구글은 나이 정보를 쉽게 주지 않으므로 20대로 기본 설정
+
+      // 백엔드에 정보 저장 후 고유 DB 순번 받아오기
+      String? dbUserId = await _sendLoginDataToBackend(socialId, "google", ageGroup);
+
+      if (dbUserId != null) {
+        _navigateToMain(ageGroup, dbUserId);
+      } else {
+        _showError('서버 연결에 실패했습니다.');
+        if (mounted) setState(() => _isSigningIn = false);
+      }
 
     } catch (error) {
       debugPrint('구글 로그인 실패: $error');
       _showError('구글 로그인에 실패했습니다.');
-      if (mounted) setState(() => _isSigningIn = false); // 에러 발생 시 로딩 끄기
+      if (mounted) setState(() => _isSigningIn = false);
     }
   }
 
-  void _navigateToMain(String? ageRange) {
+  // 메인 화면으로 넘어갈 때 발급받은 DB 순번(dbUserId)도 같이 넘겨줌!
+  void _navigateToMain(String ageGroup, String dbUserId) {
     int targetAge = 20;
-    if (ageRange != null) {
-      if (ageRange.contains('20')) targetAge = 20;
-      else if (ageRange.contains('30')) targetAge = 30;
-      else if (ageRange.contains('40')) targetAge = 40;
-      else if (ageRange.contains('50')) targetAge = 50;
-    }
+    if (ageGroup.contains('10')) targetAge = 10;
+    else if (ageGroup.contains('20')) targetAge = 20;
+    else if (ageGroup.contains('30')) targetAge = 30;
+    else if (ageGroup.contains('40')) targetAge = 40;
+    else if (ageGroup.contains('50')) targetAge = 50;
 
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(builder: (context) => MovieSwipeScreen(userAge: targetAge)),
+      MaterialPageRoute(builder: (context) => MovieSwipeScreen(userAge: targetAge, dbUserId: dbUserId)),
     );
   }
 
