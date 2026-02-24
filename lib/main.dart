@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; //앱 종료(SystemNavigator)를 위해 추가된 패키지
+import 'package:flutter/services.dart';
 import 'package:flutter_card_swiper/flutter_card_swiper.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:kakao_flutter_sdk/kakao_flutter_sdk.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:url_launcher/url_launcher.dart'; // 웹 브라우저/앱 실행을 위한 패키지 추가
 import 'login_screen.dart';
 
 void main() async {
@@ -30,7 +31,9 @@ class FigmaToCodeApp extends StatelessWidget {
 
 class MovieSwipeScreen extends StatefulWidget {
   final int userAge;
-  const MovieSwipeScreen({super.key, this.userAge = 20});
+  final String dbUserId; // 파이썬 DB에서 발급받은 진짜 유저 순번
+
+  const MovieSwipeScreen({super.key, this.userAge = 20, required this.dbUserId});
 
   @override
   State<MovieSwipeScreen> createState() => _MovieSwipeScreenState();
@@ -53,7 +56,7 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
       String ageQuery = "${widget.userAge}-${widget.userAge + 9}";
       String timestamp = DateTime.now().millisecondsSinceEpoch.toString();
 
-      final response = await http.get(Uri.parse('http://10.0.2.2:8000/questions/$ageQuery?t=$timestamp'));
+      final response = await http.get(Uri.parse('http://192.168.45.142:8000/questions/$ageQuery?t=$timestamp'));
 
       if (response.statusCode == 200) {
         setState(() {
@@ -68,19 +71,32 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
   }
 
   Future<void> _sendAnalysisRequest() async {
-    final response = await http.post(
-      Uri.parse('http://10.0.2.2:8000/recommend'),
-      headers: {"Content-Type": "application/json"},
-      body: json.encode(userResponses),
-    );
+    try {
+      final response = await http.post(
+        Uri.parse('http://192.168.45.142:8000/recommend'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode(userResponses),
+      );
 
-    if (response.statusCode == 200) {
-      final result = json.decode(response.body);
-      if (mounted) _showResultDialog(result);
+      if (response.statusCode == 200) {
+        final result = json.decode(response.body);
+        if (mounted) _showResultDialog(result);
+      } else {
+        debugPrint("서버 에러: ${response.statusCode} - ${response.body}");
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text("추천에 실패했습니다. 취향을 조금 더 다양하게 선택해 보세요! (에러: ${response.statusCode})"),
+              backgroundColor: Colors.redAccent,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint("네트워크 에러: $e");
     }
   }
 
-  // 앱 종료 확인 팝업창 띄우기 함수
   Future<bool> _showExitConfirmation() async {
     return await showDialog(
       context: context,
@@ -91,12 +107,12 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
         content: const Text("어플리케이션을 종료하시겠습니까?", style: TextStyle(color: Colors.white70)),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(false), // 취소 시 false 반환
+            onPressed: () => Navigator.of(context).pop(false),
             child: const Text("취소", style: TextStyle(color: Colors.grey)),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-            onPressed: () => SystemNavigator.pop(), // 진짜 앱 종료 코드
+            onPressed: () => SystemNavigator.pop(),
             child: const Text("종료", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
           ),
         ],
@@ -106,13 +122,16 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
 
   void _showResultDialog(Map<String, dynamic> result) {
     String tasteType = result['taste_analysis']['primary_factor'];
-
     String specialMessage = (tasteType == "확고한 주관")
         ? "취향이 아주 확고하시네요!\n당신을 위해 한국에서 사랑받은 최고의 명작을 골라왔어요."
         : "당신의 취향을 저격할 인생 영화입니다.";
 
     String overview = result['recommendation']['overview'] ?? "";
     if (overview.isEmpty) overview = "줄거리 정보가 제공되지 않는 영화입니다.";
+
+    // OTT 정보 및 시청 링크 가져오기
+    List<dynamic> providers = result['recommendation']['providers'] ?? [];
+    String watchLink = result['recommendation']['watch_link'] ?? "";
 
     showDialog(
       context: context,
@@ -130,11 +149,41 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
             children: [
               Text(specialMessage, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70)),
               const SizedBox(height: 15),
+
+              // 포스터 클릭 시 OTT 링크로 이동 기능
               if (result['recommendation']['poster_url'] != "")
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(15),
-                  child: Image.network(result['recommendation']['poster_url'], height: 220, fit: BoxFit.cover),
+                GestureDetector(
+                  onTap: () async {
+                    if (watchLink.isNotEmpty) {
+                      final Uri url = Uri.parse(watchLink);
+                      if (await canLaunchUrl(url)) {
+                        await launchUrl(url, mode: LaunchMode.externalApplication);
+                      }
+                    } else {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text("현재 제공되는 OTT 링크가 없습니다.")),
+                        );
+                      }
+                    }
+                  },
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(15),
+                        child: Image.network(result['recommendation']['poster_url'], height: 200, fit: BoxFit.cover),
+                      ),
+                      if (watchLink.isNotEmpty)
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                          child: const Icon(Icons.play_arrow, color: Colors.white, size: 40),
+                        ),
+                    ],
+                  ),
                 ),
+
               const SizedBox(height: 15),
               Text(result['recommendation']['title'],
                   style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.cyanAccent),
@@ -143,38 +192,65 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
               Text("개봉 연도: ${result['recommendation']['release_date'].toString().split('-')[0]}년",
                   style: const TextStyle(color: Colors.grey, fontSize: 13)),
               const SizedBox(height: 15),
-              Container(
-                constraints: const BoxConstraints(maxHeight: 100),
-                padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
-                decoration: BoxDecoration(
-                  color: Colors.black26,
-                  borderRadius: BorderRadius.circular(10),
+
+              // 제공되는 OTT 플랫폼 아이콘들 보여주기
+              if (providers.isNotEmpty) ...[
+                const Text("지금 바로 볼 수 있는 곳", style: TextStyle(color: Colors.white70, fontSize: 12)),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 10,
+                  children: providers.map((p) {
+                    return ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.network(p['logo_url'], width: 35, height: 35),
+                    );
+                  }).toList(),
                 ),
+                const SizedBox(height: 15),
+              ],
+
+              Container(
+                constraints: const BoxConstraints(maxHeight: 80),
+                padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+                decoration: BoxDecoration(color: Colors.black26, borderRadius: BorderRadius.circular(10)),
                 child: SingleChildScrollView(
-                  child: Text(
-                    overview,
-                    style: const TextStyle(color: Colors.white60, fontSize: 13, height: 1.4),
-                    textAlign: TextAlign.center,
-                  ),
+                  child: Text(overview, style: const TextStyle(color: Colors.white60, fontSize: 13, height: 1.4), textAlign: TextAlign.center),
                 ),
               ),
             ],
           ),
         ),
         actions: [
-          Center(
-            child: ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.cyan),
-              onPressed: () {
-                Navigator.pop(context);
-                setState(() {
-                  isLoading = true;
-                  userResponses.clear();
-                });
-                _fetchMoviesFromBackend();
-              },
-              child: const Text("다시 하기", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-            ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              // 보러 가기 버튼
+              if (watchLink.isNotEmpty)
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                  onPressed: () async {
+                    final Uri url = Uri.parse(watchLink);
+                    if (await canLaunchUrl(url)) {
+                      await launchUrl(url, mode: LaunchMode.externalApplication);
+                    }
+                  },
+                  icon: const Icon(Icons.play_arrow, color: Colors.white),
+                  label: const Text("보러 가기", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                ),
+              // 다시 하기 버튼
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.cyan),
+                onPressed: () {
+                  Navigator.pop(context);
+                  setState(() {
+                    isLoading = true;
+                    userResponses.clear();
+                  });
+                  _fetchMoviesFromBackend();
+                },
+                child: const Text("다시 하기", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+              ),
+            ],
           )
         ],
       ),
@@ -195,7 +271,6 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
   Widget build(BuildContext context) {
     if (isLoading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
 
-    // 💡 PopScope: 안드로이드 기기의 '뒤로 가기' 버튼을 제어하여 실수로 앱이 꺼지는 것을 방지
     return PopScope(
       canPop: false,
       onPopInvoked: (didPop) async {
@@ -209,7 +284,6 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
         appBar: AppBar(
           backgroundColor: Colors.transparent,
           elevation: 0,
-          // 💡 좌측 상단에 종료 버튼 (전원 아이콘) 추가
           leading: IconButton(
             icon: const Icon(Icons.power_settings_new, color: Colors.redAccent, size: 28),
             onPressed: () => _showExitConfirmation(),
@@ -245,9 +319,12 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
                   cardBuilder: (context, index, _, __) => _buildMovieCard(movies[index]),
                   onSwipe: (prev, curr, direction) {
                     userResponses.add({
-                      "user_id": "test_user", "movie_id": movies[prev]['movie_id'],
-                      "title": movies[prev]['title'], "genre_ids": movies[prev]['genre_ids'],
-                      "popularity": movies[prev]['popularity'], "vote_average": movies[prev]['vote_average'],
+                      "user_id": widget.dbUserId, // DB 순번 기록
+                      "movie_id": movies[prev]['movie_id'],
+                      "title": movies[prev]['title'],
+                      "genre_ids": movies[prev]['genre_ids'],
+                      "popularity": movies[prev]['popularity'],
+                      "vote_average": movies[prev]['vote_average'],
                       "is_watched": direction == CardSwiperDirection.right
                     });
                     return true;
