@@ -188,12 +188,25 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
 
   Future<void> _logout(BuildContext context) async {
     try {
-      await GoogleSignIn().signOut();
-      try { if (await AuthApi.instance.hasToken()) await UserApi.instance.logout(); } catch (_) {}
+      // 매번 새로 생성하기보다 인스턴스를 재사용하거나, 명시적으로 처리
+      final GoogleSignIn googleSignIn = GoogleSignIn();
+      await googleSignIn.signOut();
+      await googleSignIn.disconnect(); // 연결을 완전히 해제하여 채널 종료 유도
+
+      try {
+        if (await AuthApi.instance.hasToken()) await UserApi.instance.logout();
+      } catch (_) {}
+
       if (context.mounted) {
-        Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (context) => const LoginScreen()), (route) => false);
+        Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (context) => const LoginScreen()),
+                (route) => false
+        );
       }
-    } catch (e) { debugPrint('로그아웃 실패: $e'); }
+    } catch (e) {
+      debugPrint('로그아웃 실패: $e');
+    }
   }
 
   @override
