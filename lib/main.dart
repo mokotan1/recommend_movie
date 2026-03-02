@@ -44,6 +44,7 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
   List<dynamic> movies = [];
   List<Map<String, dynamic>> userResponses = [];
   bool isLoading = true;
+  bool isAnalyzing = false; //결과 분석 중인지 확인하는 변수
 
   @override
   void initState() {
@@ -56,7 +57,7 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
       String ageQuery = "${widget.userAge}-${widget.userAge + 9}";
       String timestamp = DateTime.now().millisecondsSinceEpoch.toString();
 
-      final response = await http.get(Uri.parse('http://192.168.45.142:8000/questions/$ageQuery?t=$timestamp'));
+      final response = await http.get(Uri.parse('http://54.180.231.11:8000/questions/$ageQuery?t=$timestamp'));
 
       if (response.statusCode == 200) {
         setState(() {
@@ -71,9 +72,14 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
   }
 
   Future<void> _sendAnalysisRequest() async {
+    //서버에 요청을 보내기 직전에 로딩 화면을 켬
+    setState(() {
+      isAnalyzing = true;
+    });
+
     try {
       final response = await http.post(
-        Uri.parse('http://192.168.45.142:8000/recommend'),
+        Uri.parse('http://54.180.231.11:8000/recommend'),
         headers: {"Content-Type": "application/json"},
         body: json.encode(userResponses),
       );
@@ -82,6 +88,9 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
         final result = json.decode(response.body);
         if (mounted) _showResultDialog(result);
       } else {
+        setState(() {
+          isAnalyzing = false;
+        });
         debugPrint("서버 에러: ${response.statusCode} - ${response.body}");
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -93,6 +102,10 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
         }
       }
     } catch (e) {
+      //네트워크 에러 시 무한 로딩 방지
+      setState(() {
+        isAnalyzing = false;
+      });
       debugPrint("네트워크 에러: $e");
     }
   }
@@ -129,13 +142,12 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
     String overview = result['recommendation']['overview'] ?? "";
     if (overview.isEmpty) overview = "줄거리 정보가 제공되지 않는 영화입니다.";
 
-    // OTT 정보 및 시청 링크 가져오기
     List<dynamic> providers = result['recommendation']['providers'] ?? [];
     String watchLink = result['recommendation']['watch_link'] ?? "";
 
     showDialog(
       context: context,
-      barrierDismissible: false,
+      barrierDismissible: false, // 팝업창 바깥을 눌러서 닫는 것 방지
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF1C273D),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -150,7 +162,6 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
               Text(specialMessage, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70)),
               const SizedBox(height: 15),
 
-              // 포스터 클릭 시 OTT 링크로 이동 기능
               if (result['recommendation']['poster_url'] != "")
                 GestureDetector(
                   onTap: () async {
@@ -193,16 +204,48 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
                   style: const TextStyle(color: Colors.grey, fontSize: 13)),
               const SizedBox(height: 15),
 
-              // 제공되는 OTT 플랫폼 아이콘들 보여주기
               if (providers.isNotEmpty) ...[
-                const Text("지금 바로 볼 수 있는 곳", style: TextStyle(color: Colors.white70, fontSize: 12)),
+                const Text("로고를 누르면 해당 앱으로 이동합니다", style: TextStyle(color: Colors.white70, fontSize: 12)),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 10,
                   children: providers.map((p) {
-                    return ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: Image.network(p['logo_url'], width: 35, height: 35),
+                    return GestureDetector(
+                      onTap: () async {
+                        String providerName = p['name'] ?? "";
+                        String movieTitle = result['recommendation']['title'];
+                        Uri? appUrl;
+
+                        if (providerName.toLowerCase().contains("netflix")) {
+                          appUrl = Uri.parse("nflx://www.netflix.com/search?q=$movieTitle");
+                        } else if (providerName.toLowerCase().contains("watcha")) {
+                          appUrl = Uri.parse("watcha://search?q=$movieTitle");
+                        } else if (providerName.toLowerCase().contains("tving")) {
+                          appUrl = Uri.parse("tving://search?keyword=$movieTitle");
+                        } else if (providerName.toLowerCase().contains("wavve")) {
+                          appUrl = Uri.parse("pooq://search?keyword=$movieTitle");
+                        } else if (providerName.toLowerCase().contains("disney")) {
+                          appUrl = Uri.parse("disneyplus://search?q=$movieTitle");
+                        }
+
+                        try {
+                          if (appUrl != null && await canLaunchUrl(appUrl)) {
+                            await launchUrl(appUrl, mode: LaunchMode.externalApplication);
+                          } else {
+                            if (watchLink.isNotEmpty) {
+                              await launchUrl(Uri.parse(watchLink), mode: LaunchMode.externalApplication);
+                            }
+                          }
+                        } catch (e) {
+                          if (watchLink.isNotEmpty) {
+                            await launchUrl(Uri.parse(watchLink), mode: LaunchMode.externalApplication);
+                          }
+                        }
+                      },
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.network(p['logo_url'], width: 45, height: 45),
+                      ),
                     );
                   }).toList(),
                 ),
@@ -224,7 +267,6 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              // 보러 가기 버튼
               if (watchLink.isNotEmpty)
                 ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
@@ -237,13 +279,13 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
                   icon: const Icon(Icons.play_arrow, color: Colors.white),
                   label: const Text("보러 가기", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                 ),
-              // 다시 하기 버튼
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: Colors.cyan),
                 onPressed: () {
                   Navigator.pop(context);
                   setState(() {
                     isLoading = true;
+                    isAnalyzing = false; //다시 시작할 때 분석 상태 초기화
                     userResponses.clear();
                   });
                   _fetchMoviesFromBackend();
@@ -307,7 +349,21 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
           ],
         ),
         body: SafeArea(
-          child: Column(
+          // isAnalyzing 변수에 따라 화면을 덮어버리는 로직
+          child: isAnalyzing
+              ? const Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                CircularProgressIndicator(color: Colors.cyanAccent),
+                SizedBox(height: 20),
+                Text("당신의 영화 취향을 분석하고 있습니다...\n잠시만 기다려주세요! 🍿",
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.white70, fontSize: 16, height: 1.5)),
+              ],
+            ),
+          )
+              : Column(
             children: [
               Text('MovieSwipe AI (${widget.userAge}대)', style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
               const Text('한국에서 사랑받은 명작들을 스와이프하세요!'),
@@ -316,10 +372,14 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
                   key: ValueKey(movies.hashCode),
                   controller: controller,
                   cardsCount: movies.length,
+                  allowedSwipeDirection: const AllowedSwipeDirection.symmetric(
+                    horizontal: true,
+                    vertical: false,
+                  ),
                   cardBuilder: (context, index, _, __) => _buildMovieCard(movies[index]),
                   onSwipe: (prev, curr, direction) {
                     userResponses.add({
-                      "user_id": widget.dbUserId, // DB 순번 기록
+                      "user_id": widget.dbUserId,
                       "movie_id": movies[prev]['movie_id'],
                       "title": movies[prev]['title'],
                       "genre_ids": movies[prev]['genre_ids'],

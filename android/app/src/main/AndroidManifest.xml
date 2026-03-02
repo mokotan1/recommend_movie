@@ -46,5 +46,25 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="nflx" /> </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="watcha" /> </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="tving" /> </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="pooq" /> </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="disneyplus" /> </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
     </queries>
 </manifest>
