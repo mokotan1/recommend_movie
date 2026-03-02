@@ -24,7 +24,7 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<String?> _sendLoginDataToBackend(String socialId, String provider, String ageGroup) async {
     try {
       final response = await http.post(
-        Uri.parse('http://192.168.45.142:8000/login'),
+        Uri.parse('http://54.180.231.11:8000/login'),
         headers: {"Content-Type": "application/json"},
         body: json.encode({
           "user_id": socialId,
