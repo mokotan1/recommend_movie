@@ -6,7 +6,6 @@ import 'dart:convert';
 import 'package:kakao_flutter_sdk/kakao_flutter_sdk.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:external_app_launcher/external_app_launcher.dart';
 import 'login_screen.dart';
 
 void main() async {
@@ -93,7 +92,10 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
         });
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("추천에 실패했습니다. (에러: ${response.statusCode})"), backgroundColor: Colors.redAccent),
+            SnackBar(
+              content: Text("추천에 실패했습니다. (에러: ${response.statusCode})"),
+              backgroundColor: Colors.redAccent,
+            ),
           );
         }
       }
@@ -114,7 +116,10 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
         title: const Text("앱 종료", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         content: const Text("어플리케이션을 종료하시겠습니까?", style: TextStyle(color: Colors.white70)),
         actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text("취소", style: TextStyle(color: Colors.grey))),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text("취소", style: TextStyle(color: Colors.grey)),
+          ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
             onPressed: () => SystemNavigator.pop(),
@@ -126,7 +131,11 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
   }
 
   void _showResultDialog(Map<String, dynamic> result) {
-    String tasteType = result['taste_analysis']['primary_factor'] ?? "영화 매니아";
+    String tasteType = result['taste_analysis']['primary_factor'];
+    String specialMessage = (tasteType == "확고한 주관")
+        ? "취향이 아주 확고하시네요!\n당신을 위해 한국에서 사랑받은 최고의 명작을 골라왔어요."
+        : "당신의 취향을 저격할 인생 영화입니다.";
+
     String overview = result['recommendation']['overview'] ?? "줄거리 정보가 제공되지 않는 영화입니다.";
     List<dynamic> providers = result['recommendation']['providers'] ?? [];
     String watchLink = result['recommendation']['watch_link'] ?? "";
@@ -137,13 +146,15 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF1C273D),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text("분석 완료!\n($tasteType)", textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+        title: Text("분석 완료!\n($tasteType)",
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
         content: SizedBox(
           width: double.maxFinite,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text("당신의 취향을 저격할 인생 영화입니다.", textAlign: TextAlign.center, style: TextStyle(color: Colors.white70)),
+              Text(specialMessage, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70)),
               const SizedBox(height: 15),
 
               if (result['recommendation']['poster_url'] != "")
@@ -171,9 +182,12 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
                 ),
 
               const SizedBox(height: 15),
-              Text(result['recommendation']['title'], style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.cyanAccent), textAlign: TextAlign.center),
+              Text(result['recommendation']['title'],
+                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.cyanAccent),
+                  textAlign: TextAlign.center),
               const SizedBox(height: 5),
-              Text("개봉 연도: ${result['recommendation']['release_date'].toString().split('-')[0]}년", style: const TextStyle(color: Colors.grey, fontSize: 13)),
+              Text("개봉 연도: ${result['recommendation']['release_date'].toString().split('-')[0]}년",
+                  style: const TextStyle(color: Colors.grey, fontSize: 13)),
               const SizedBox(height: 15),
 
               if (providers.isNotEmpty) ...[
@@ -184,34 +198,52 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
                   children: providers.map<Widget>((p) {
                     return GestureDetector(
                       onTap: () async {
-                        // 🚀 1. 파이썬 서버가 내려준 데이터 받기
-                        String appUrlStr = p['app_url'] ?? "";
-                        String packageName = p['package_name'] ?? "";
+                        String providerName = p['name'] ?? "";
+                        String movieTitle = result['recommendation']['title'];
+                        String encodedTitle = Uri.encodeQueryComponent(movieTitle);
+
+                        Uri? appUrl;
+                        String playStoreUrl = "";
+                        LaunchMode launchMode = LaunchMode.externalApplication;
+
+                        // 🚀 1. 넷플릭스와 디즈니+는 '완벽하게 작동했던 성공 코드'로 롤백
+                        if (providerName.toLowerCase().contains("netflix")) {
+                          appUrl = Uri.parse("https://www.netflix.com/search?q=$encodedTitle");
+                          launchMode = LaunchMode.externalNonBrowserApplication;
+                          playStoreUrl = "https://play.google.com/store/apps/details?id=com.netflix.mediaclient";
+                        } else if (providerName.toLowerCase().contains("disney")) {
+                          appUrl = Uri.parse("https://www.disneyplus.com/search?q=$encodedTitle");
+                          launchMode = LaunchMode.externalNonBrowserApplication;
+                          playStoreUrl = "https://play.google.com/store/apps/details?id=com.disney.disneyplus";
+                        }
+                        // 🚀 2. 국내 앱들은 플러터가 잘 읽을 수 있게 뒤에 '//main'을 붙인 형태 적용
+                        else if (providerName.toLowerCase().contains("watcha")) {
+                          appUrl = Uri.parse("watchaplay://main");
+                          playStoreUrl = "https://play.google.com/store/apps/details?id=com.frograms.watcha";
+                        } else if (providerName.toLowerCase().contains("tving")) {
+                          appUrl = Uri.parse("tving://main");
+                          playStoreUrl = "https://play.google.com/store/apps/details?id=net.cj.cjhv.gs.tving";
+                        } else if (providerName.toLowerCase().contains("wavve") || providerName.toLowerCase().contains("pooq")) {
+                          appUrl = Uri.parse("wavve://main");
+                          playStoreUrl = "https://play.google.com/store/apps/details?id=kr.co.captv.pooqV2";
+                        } else if (providerName.toLowerCase().contains("amazon") || providerName.toLowerCase().contains("prime")) {
+                          appUrl = Uri.parse("primevideo://main");
+                          playStoreUrl = "https://play.google.com/store/apps/details?id=com.amazon.avod.thirdpartyclient";
+                        }
 
                         try {
-                          // 🚀 2. 넷플릭스, 디즈니플러스 처리 (URL 방식)
-                          if (appUrlStr.isNotEmpty) {
-                            Uri appUrl = Uri.parse(appUrlStr);
-                            bool launched = await launchUrl(appUrl, mode: LaunchMode.externalNonBrowserApplication);
-                            if (!launched && watchLink.isNotEmpty) {
-                              await launchUrl(Uri.parse(watchLink), mode: LaunchMode.externalApplication);
+                          if (appUrl != null) {
+                            bool launched = await launchUrl(appUrl, mode: launchMode);
+
+                            // 앱 켜기 실패 시 플레이스토어 이동
+                            if (!launched && playStoreUrl.isNotEmpty) {
+                              await launchUrl(Uri.parse(playStoreUrl), mode: LaunchMode.externalApplication);
                             }
                           }
-                          // 🚀 3. 한국 OTT 처리 (패키지명 멱살 잡기 방식)
-                          else if (packageName.isNotEmpty) {
-                            await LaunchApp.openApp(
-                              androidPackageName: packageName,
-                              openStore: true,
-                            );
-                          }
-                          // 그 외의 경우 (안전망)
-                          else if (watchLink.isNotEmpty) {
-                            await launchUrl(Uri.parse(watchLink), mode: LaunchMode.externalApplication);
-                          }
                         } catch (e) {
-                          debugPrint("앱 실행 에러: $e");
-                          if (watchLink.isNotEmpty) {
-                            await launchUrl(Uri.parse(watchLink), mode: LaunchMode.externalApplication);
+                          debugPrint("앱 실행 에러, 플레이스토어 우회: $e");
+                          if (playStoreUrl.isNotEmpty) {
+                            await launchUrl(Uri.parse(playStoreUrl), mode: LaunchMode.externalApplication);
                           }
                         }
                       },
