@@ -5,7 +5,8 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:kakao_flutter_sdk/kakao_flutter_sdk.dart';
 import 'package:google_sign_in/google_sign_in.dart';
-import 'package:url_launcher/url_launcher.dart'; // 웹 브라우저/앱 실행을 위한 패키지 추가
+import 'package:url_launcher/url_launcher.dart';
+import 'package:external_app_launcher/external_app_launcher.dart';
 import 'login_screen.dart';
 
 void main() async {
@@ -31,7 +32,7 @@ class FigmaToCodeApp extends StatelessWidget {
 
 class MovieSwipeScreen extends StatefulWidget {
   final int userAge;
-  final String dbUserId; // 파이썬 DB에서 발급받은 진짜 유저 순번
+  final String dbUserId;
 
   const MovieSwipeScreen({super.key, this.userAge = 20, required this.dbUserId});
 
@@ -44,7 +45,7 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
   List<dynamic> movies = [];
   List<Map<String, dynamic>> userResponses = [];
   bool isLoading = true;
-  bool isAnalyzing = false; //결과 분석 중인지 확인하는 변수
+  bool isAnalyzing = false;
 
   @override
   void initState() {
@@ -72,7 +73,6 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
   }
 
   Future<void> _sendAnalysisRequest() async {
-    //서버에 요청을 보내기 직전에 로딩 화면을 켬
     setState(() {
       isAnalyzing = true;
     });
@@ -91,18 +91,13 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
         setState(() {
           isAnalyzing = false;
         });
-        debugPrint("서버 에러: ${response.statusCode} - ${response.body}");
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text("추천에 실패했습니다. 취향을 조금 더 다양하게 선택해 보세요! (에러: ${response.statusCode})"),
-              backgroundColor: Colors.redAccent,
-            ),
+            SnackBar(content: Text("추천에 실패했습니다. (에러: ${response.statusCode})"), backgroundColor: Colors.redAccent),
           );
         }
       }
     } catch (e) {
-      //네트워크 에러 시 무한 로딩 방지
       setState(() {
         isAnalyzing = false;
       });
@@ -119,10 +114,7 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
         title: const Text("앱 종료", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         content: const Text("어플리케이션을 종료하시겠습니까?", style: TextStyle(color: Colors.white70)),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text("취소", style: TextStyle(color: Colors.grey)),
-          ),
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text("취소", style: TextStyle(color: Colors.grey))),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
             onPressed: () => SystemNavigator.pop(),
@@ -134,48 +126,31 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
   }
 
   void _showResultDialog(Map<String, dynamic> result) {
-    String tasteType = result['taste_analysis']['primary_factor'];
-    String specialMessage = (tasteType == "확고한 주관")
-        ? "취향이 아주 확고하시네요!\n당신을 위해 한국에서 사랑받은 최고의 명작을 골라왔어요."
-        : "당신의 취향을 저격할 인생 영화입니다.";
-
-    String overview = result['recommendation']['overview'] ?? "";
-    if (overview.isEmpty) overview = "줄거리 정보가 제공되지 않는 영화입니다.";
-
+    String tasteType = result['taste_analysis']['primary_factor'] ?? "영화 매니아";
+    String overview = result['recommendation']['overview'] ?? "줄거리 정보가 제공되지 않는 영화입니다.";
     List<dynamic> providers = result['recommendation']['providers'] ?? [];
     String watchLink = result['recommendation']['watch_link'] ?? "";
 
     showDialog(
       context: context,
-      barrierDismissible: false, // 팝업창 바깥을 눌러서 닫는 것 방지
+      barrierDismissible: false,
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF1C273D),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text("분석 완료!\n($tasteType)",
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+        title: Text("분석 완료!\n($tasteType)", textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
         content: SizedBox(
           width: double.maxFinite,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(specialMessage, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70)),
+              const Text("당신의 취향을 저격할 인생 영화입니다.", textAlign: TextAlign.center, style: TextStyle(color: Colors.white70)),
               const SizedBox(height: 15),
 
               if (result['recommendation']['poster_url'] != "")
                 GestureDetector(
                   onTap: () async {
                     if (watchLink.isNotEmpty) {
-                      final Uri url = Uri.parse(watchLink);
-                      if (await canLaunchUrl(url)) {
-                        await launchUrl(url, mode: LaunchMode.externalApplication);
-                      }
-                    } else {
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text("현재 제공되는 OTT 링크가 없습니다.")),
-                        );
-                      }
+                      await launchUrl(Uri.parse(watchLink), mode: LaunchMode.externalApplication);
                     }
                   },
                   child: Stack(
@@ -196,12 +171,9 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
                 ),
 
               const SizedBox(height: 15),
-              Text(result['recommendation']['title'],
-                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.cyanAccent),
-                  textAlign: TextAlign.center),
+              Text(result['recommendation']['title'], style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.cyanAccent), textAlign: TextAlign.center),
               const SizedBox(height: 5),
-              Text("개봉 연도: ${result['recommendation']['release_date'].toString().split('-')[0]}년",
-                  style: const TextStyle(color: Colors.grey, fontSize: 13)),
+              Text("개봉 연도: ${result['recommendation']['release_date'].toString().split('-')[0]}년", style: const TextStyle(color: Colors.grey, fontSize: 13)),
               const SizedBox(height: 15),
 
               if (providers.isNotEmpty) ...[
@@ -209,34 +181,35 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 10,
-                  children: providers.map((p) {
+                  children: providers.map<Widget>((p) {
                     return GestureDetector(
                       onTap: () async {
-                        String providerName = p['name'] ?? "";
-                        String movieTitle = result['recommendation']['title'];
-                        Uri? appUrl;
-
-                        if (providerName.toLowerCase().contains("netflix")) {
-                          appUrl = Uri.parse("nflx://www.netflix.com/search?q=$movieTitle");
-                        } else if (providerName.toLowerCase().contains("watcha")) {
-                          appUrl = Uri.parse("watcha://search?q=$movieTitle");
-                        } else if (providerName.toLowerCase().contains("tving")) {
-                          appUrl = Uri.parse("tving://search?keyword=$movieTitle");
-                        } else if (providerName.toLowerCase().contains("wavve")) {
-                          appUrl = Uri.parse("pooq://search?keyword=$movieTitle");
-                        } else if (providerName.toLowerCase().contains("disney")) {
-                          appUrl = Uri.parse("disneyplus://search?q=$movieTitle");
-                        }
+                        // 🚀 1. 파이썬 서버가 내려준 데이터 받기
+                        String appUrlStr = p['app_url'] ?? "";
+                        String packageName = p['package_name'] ?? "";
 
                         try {
-                          if (appUrl != null && await canLaunchUrl(appUrl)) {
-                            await launchUrl(appUrl, mode: LaunchMode.externalApplication);
-                          } else {
-                            if (watchLink.isNotEmpty) {
+                          // 🚀 2. 넷플릭스, 디즈니플러스 처리 (URL 방식)
+                          if (appUrlStr.isNotEmpty) {
+                            Uri appUrl = Uri.parse(appUrlStr);
+                            bool launched = await launchUrl(appUrl, mode: LaunchMode.externalNonBrowserApplication);
+                            if (!launched && watchLink.isNotEmpty) {
                               await launchUrl(Uri.parse(watchLink), mode: LaunchMode.externalApplication);
                             }
                           }
+                          // 🚀 3. 한국 OTT 처리 (패키지명 멱살 잡기 방식)
+                          else if (packageName.isNotEmpty) {
+                            await LaunchApp.openApp(
+                              androidPackageName: packageName,
+                              openStore: true,
+                            );
+                          }
+                          // 그 외의 경우 (안전망)
+                          else if (watchLink.isNotEmpty) {
+                            await launchUrl(Uri.parse(watchLink), mode: LaunchMode.externalApplication);
+                          }
                         } catch (e) {
+                          debugPrint("앱 실행 에러: $e");
                           if (watchLink.isNotEmpty) {
                             await launchUrl(Uri.parse(watchLink), mode: LaunchMode.externalApplication);
                           }
@@ -271,9 +244,8 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
                 ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
                   onPressed: () async {
-                    final Uri url = Uri.parse(watchLink);
-                    if (await canLaunchUrl(url)) {
-                      await launchUrl(url, mode: LaunchMode.externalApplication);
+                    if (await canLaunchUrl(Uri.parse(watchLink))) {
+                      await launchUrl(Uri.parse(watchLink), mode: LaunchMode.externalApplication);
                     }
                   },
                   icon: const Icon(Icons.play_arrow, color: Colors.white),
@@ -285,7 +257,7 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
                   Navigator.pop(context);
                   setState(() {
                     isLoading = true;
-                    isAnalyzing = false; //다시 시작할 때 분석 상태 초기화
+                    isAnalyzing = false;
                     userResponses.clear();
                   });
                   _fetchMoviesFromBackend();
@@ -318,19 +290,13 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
       onPopInvoked: (didPop) async {
         if (didPop) return;
         final shouldExit = await _showExitConfirmation();
-        if (shouldExit) {
-          SystemNavigator.pop();
-        }
+        if (shouldExit) SystemNavigator.pop();
       },
       child: Scaffold(
         appBar: AppBar(
           backgroundColor: Colors.transparent,
           elevation: 0,
-          leading: IconButton(
-            icon: const Icon(Icons.power_settings_new, color: Colors.redAccent, size: 28),
-            onPressed: () => _showExitConfirmation(),
-            tooltip: '앱 종료',
-          ),
+          leading: IconButton(icon: const Icon(Icons.power_settings_new, color: Colors.redAccent, size: 28), onPressed: () => _showExitConfirmation()),
           actions: [
             Padding(
               padding: const EdgeInsets.only(right: 16.0),
@@ -349,7 +315,6 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
           ],
         ),
         body: SafeArea(
-          // isAnalyzing 변수에 따라 화면을 덮어버리는 로직
           child: isAnalyzing
               ? const Center(
             child: Column(
@@ -357,9 +322,7 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
               children: [
                 CircularProgressIndicator(color: Colors.cyanAccent),
                 SizedBox(height: 20),
-                Text("당신의 영화 취향을 분석하고 있습니다...\n잠시만 기다려주세요! 🍿",
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.white70, fontSize: 16, height: 1.5)),
+                Text("당신의 영화 취향을 분석하고 있습니다...\n잠시만 기다려주세요! 🍿", textAlign: TextAlign.center, style: TextStyle(color: Colors.white70, fontSize: 16, height: 1.5)),
               ],
             ),
           )
@@ -372,10 +335,7 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
                   key: ValueKey(movies.hashCode),
                   controller: controller,
                   cardsCount: movies.length,
-                  allowedSwipeDirection: const AllowedSwipeDirection.symmetric(
-                    horizontal: true,
-                    vertical: false,
-                  ),
+                  allowedSwipeDirection: const AllowedSwipeDirection.symmetric(horizontal: true, vertical: false),
                   cardBuilder: (context, index, _, __) => _buildMovieCard(movies[index]),
                   onSwipe: (prev, curr, direction) {
                     userResponses.add({
@@ -411,10 +371,7 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
 
   Widget _buildMovieCard(dynamic movie) {
     return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(24),
-        image: DecorationImage(image: NetworkImage(movie['poster_url']), fit: BoxFit.cover),
-      ),
+      decoration: BoxDecoration(borderRadius: BorderRadius.circular(24), image: DecorationImage(image: NetworkImage(movie['poster_url']), fit: BoxFit.cover)),
       child: Container(
         alignment: Alignment.bottomCenter,
         padding: const EdgeInsets.all(20),
@@ -430,11 +387,7 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
   Widget _actionButton(Color color, IconData icon, VoidCallback onTap) {
     return GestureDetector(
       onTap: onTap,
-      child: Container(
-        width: 60, height: 60,
-        decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-        child: Icon(icon, color: color, size: 30),
-      ),
+      child: Container(width: 60, height: 60, decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle), child: Icon(icon, color: color, size: 30)),
     );
   }
 }
