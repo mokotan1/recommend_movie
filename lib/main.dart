@@ -10,6 +10,7 @@ import 'login_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // 카카오 SDK 초기화
   KakaoSdk.init(nativeAppKey: 'a392d68a91bde52cb94501eeaa9bcf1f');
   runApp(const FigmaToCodeApp());
 }
@@ -40,11 +41,17 @@ class MovieSwipeScreen extends StatefulWidget {
 }
 
 class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
-  final CardSwiperController controller = CardSwiperController();
+  // 수정된 부분: final 키워드 제거 (다시하기 시 재생성을 위해)
+  CardSwiperController controller = CardSwiperController();
   List<dynamic> movies = [];
   List<Map<String, dynamic>> userResponses = [];
+
   bool isLoading = true;
+  bool isImagesLoading = true; // 추가된 부분: 이미지 프리로딩 상태 관리
   bool isAnalyzing = false;
+
+  // 추가된 부분: 가비지 컬렉션 방지를 위해 로드된 이미지를 담아둘 리스트
+  final List<ImageProvider> _precachedImages = [];
 
   @override
   void initState() {
@@ -52,7 +59,43 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
     _fetchMoviesFromBackend();
   }
 
+  // 추가된 부분: 10개의 영화 포스터를 미리 다운로드하는 함수
+  Future<void> _precacheAllImages(List<dynamic> moviesList) async {
+    setState(() {
+      isImagesLoading = true;
+      _precachedImages.clear();
+    });
+
+    List<Future<void>> futures = [];
+
+    for (var movie in moviesList) {
+      if (movie['poster_url'] != null && movie['poster_url'].isNotEmpty) {
+        final imageProvider = NetworkImage(movie['poster_url']);
+        _precachedImages.add(imageProvider);
+
+        // 이미지 로딩 에러 시 앱이 터지지 않도록 catchError 처리
+        futures.add(precacheImage(imageProvider, context).catchError((e) {
+          debugPrint("이미지 캐싱 실패: ${movie['title']}, 에러: $e");
+        }));
+      }
+    }
+
+    // 모든 이미지가 로드될 때까지 대기
+    await Future.wait(futures);
+
+    if (mounted) {
+      setState(() {
+        isImagesLoading = false;
+      });
+    }
+  }
+
   Future<void> _fetchMoviesFromBackend() async {
+    setState(() {
+      isLoading = true;
+      isImagesLoading = true;
+    });
+
     try {
       String ageQuery = "${widget.userAge}-${widget.userAge + 9}";
       String timestamp = DateTime.now().millisecondsSinceEpoch.toString();
@@ -60,14 +103,27 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
       final response = await http.get(Uri.parse('http://54.180.231.11:8000/questions/$ageQuery?t=$timestamp'));
 
       if (response.statusCode == 200) {
-        setState(() {
-          movies = json.decode(response.body);
-          isLoading = false;
-        });
+        final fetchedMovies = json.decode(utf8.decode(response.bodyBytes));
+
+        if (mounted) {
+          setState(() {
+            movies = fetchedMovies;
+            isLoading = false; // 데이터 로딩 완료
+          });
+          // 추가된 부분: 데이터를 받은 직후 이미지 프리로딩 시작
+          await _precacheAllImages(fetchedMovies);
+        }
+      } else {
+        throw Exception("서버 응답 에러");
       }
     } catch (e) {
       debugPrint("데이터 로드 실패: $e");
-      setState(() => isLoading = false);
+      if (mounted) {
+        setState(() {
+          isLoading = false;
+          isImagesLoading = false; // 에러 시 무한 로딩 방지
+        });
+      }
     }
   }
 
@@ -75,6 +131,8 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
     setState(() {
       isAnalyzing = true;
     });
+
+    debugPrint("서버로 전송하는 답변 개수: ${userResponses.length}개");
 
     try {
       final response = await http.post(
@@ -84,24 +142,25 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
       );
 
       if (response.statusCode == 200) {
-        final result = json.decode(response.body);
+        final result = json.decode(utf8.decode(response.bodyBytes));
         if (mounted) _showResultDialog(result);
       } else {
+        debugPrint("서버 에러 코드: ${response.statusCode}");
+        debugPrint("서버 에러 응답: ${response.body}");
         setState(() {
           isAnalyzing = false;
+          userResponses.clear(); // 실패 시에도 반드시 초기화
         });
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text("추천에 실패했습니다. (에러: ${response.statusCode})"),
-              backgroundColor: Colors.redAccent,
-            ),
+            const SnackBar(content: Text("추천에 실패했습니다."), backgroundColor: Colors.redAccent),
           );
         }
       }
     } catch (e) {
       setState(() {
         isAnalyzing = false;
+        userResponses.clear();
       });
       debugPrint("네트워크 에러: $e");
     }
@@ -116,10 +175,7 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
         title: const Text("앱 종료", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         content: const Text("어플리케이션을 종료하시겠습니까?", style: TextStyle(color: Colors.white70)),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text("취소", style: TextStyle(color: Colors.grey)),
-          ),
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text("취소", style: TextStyle(color: Colors.grey))),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
             onPressed: () => SystemNavigator.pop(),
@@ -131,14 +187,11 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
   }
 
   void _showResultDialog(Map<String, dynamic> result) {
-    String tasteType = result['taste_analysis']['primary_factor'];
-    String specialMessage = (tasteType == "확고한 주관")
-        ? "취향이 아주 확고하시네요!\n당신을 위해 한국에서 사랑받은 최고의 명작을 골라왔어요."
-        : "당신의 취향을 저격할 인생 영화입니다.";
-
-    String overview = result['recommendation']['overview'] ?? "줄거리 정보가 제공되지 않는 영화입니다.";
-    List<dynamic> providers = result['recommendation']['providers'] ?? [];
-    String watchLink = result['recommendation']['watch_link'] ?? "";
+    final rec = result['recommendation'];
+    String tasteType = result['taste_analysis']['primary_factor'] ?? "영화 매니아";
+    String overview = rec['overview'] ?? "줄거리 정보가 제공되지 않는 영화입니다.";
+    List<dynamic> providers = rec['providers'] ?? [];
+    String trailerUrl = rec['trailer_url'] ?? "";
 
     showDialog(
       context: context,
@@ -146,111 +199,35 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF1C273D),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text("분석 완료!\n($tasteType)",
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+        title: Text("분석 완료!\n($tasteType)", textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
         content: SizedBox(
           width: double.maxFinite,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(specialMessage, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70)),
+              const Text("당신의 취향을 저격할 인생 영화입니다.", textAlign: TextAlign.center, style: TextStyle(color: Colors.white70)),
               const SizedBox(height: 15),
 
-              if (result['recommendation']['poster_url'] != "")
-                GestureDetector(
-                  onTap: () async {
-                    if (watchLink.isNotEmpty) {
-                      await launchUrl(Uri.parse(watchLink), mode: LaunchMode.externalApplication);
-                    }
-                  },
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(15),
-                        child: Image.network(result['recommendation']['poster_url'], height: 200, fit: BoxFit.cover),
-                      ),
-                      if (watchLink.isNotEmpty)
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
-                          child: const Icon(Icons.play_arrow, color: Colors.white, size: 40),
-                        ),
-                    ],
-                  ),
-                ),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(15),
+                child: Image.network(rec['poster_url'], height: 200, fit: BoxFit.cover),
+              ),
 
               const SizedBox(height: 15),
-              Text(result['recommendation']['title'],
-                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.cyanAccent),
-                  textAlign: TextAlign.center),
+              Text(rec['title'], style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.cyanAccent), textAlign: TextAlign.center),
               const SizedBox(height: 5),
-              Text("개봉 연도: ${result['recommendation']['release_date'].toString().split('-')[0]}년",
-                  style: const TextStyle(color: Colors.grey, fontSize: 13)),
+              Text("개봉 연도: ${rec['release_date'].toString().split('-')[0]}년", style: const TextStyle(color: Colors.grey, fontSize: 13)),
               const SizedBox(height: 15),
 
               if (providers.isNotEmpty) ...[
-                const Text("로고를 누르면 해당 앱으로 이동합니다", style: TextStyle(color: Colors.white70, fontSize: 12)),
+                const Text("이 플랫폼에서 시청 가능합니다", style: TextStyle(color: Colors.white70, fontSize: 12)),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 10,
                   children: providers.map<Widget>((p) {
-                    return GestureDetector(
-                      onTap: () async {
-                        String providerName = p['name'] ?? "";
-                        String movieTitle = result['recommendation']['title'];
-                        String encodedTitle = Uri.encodeQueryComponent(movieTitle);
-
-                        Uri? appUrl;
-                        String playStoreUrl = "";
-                        LaunchMode launchMode = LaunchMode.externalApplication;
-
-                        // 🚀 1. 넷플릭스와 디즈니+는 '완벽하게 작동했던 성공 코드'로 롤백
-                        if (providerName.toLowerCase().contains("netflix")) {
-                          appUrl = Uri.parse("https://www.netflix.com/search?q=$encodedTitle");
-                          launchMode = LaunchMode.externalNonBrowserApplication;
-                          playStoreUrl = "https://play.google.com/store/apps/details?id=com.netflix.mediaclient";
-                        } else if (providerName.toLowerCase().contains("disney")) {
-                          appUrl = Uri.parse("https://www.disneyplus.com/search?q=$encodedTitle");
-                          launchMode = LaunchMode.externalNonBrowserApplication;
-                          playStoreUrl = "https://play.google.com/store/apps/details?id=com.disney.disneyplus";
-                        }
-                        // 🚀 2. 국내 앱들은 플러터가 잘 읽을 수 있게 뒤에 '//main'을 붙인 형태 적용
-                        else if (providerName.toLowerCase().contains("watcha")) {
-                          appUrl = Uri.parse("watchaplay://main");
-                          playStoreUrl = "https://play.google.com/store/apps/details?id=com.frograms.watcha";
-                        } else if (providerName.toLowerCase().contains("tving")) {
-                          appUrl = Uri.parse("tving://main");
-                          playStoreUrl = "https://play.google.com/store/apps/details?id=net.cj.cjhv.gs.tving";
-                        } else if (providerName.toLowerCase().contains("wavve") || providerName.toLowerCase().contains("pooq")) {
-                          appUrl = Uri.parse("wavve://main");
-                          playStoreUrl = "https://play.google.com/store/apps/details?id=kr.co.captv.pooqV2";
-                        } else if (providerName.toLowerCase().contains("amazon") || providerName.toLowerCase().contains("prime")) {
-                          appUrl = Uri.parse("primevideo://main");
-                          playStoreUrl = "https://play.google.com/store/apps/details?id=com.amazon.avod.thirdpartyclient";
-                        }
-
-                        try {
-                          if (appUrl != null) {
-                            bool launched = await launchUrl(appUrl, mode: launchMode);
-
-                            // 앱 켜기 실패 시 플레이스토어 이동
-                            if (!launched && playStoreUrl.isNotEmpty) {
-                              await launchUrl(Uri.parse(playStoreUrl), mode: LaunchMode.externalApplication);
-                            }
-                          }
-                        } catch (e) {
-                          debugPrint("앱 실행 에러, 플레이스토어 우회: $e");
-                          if (playStoreUrl.isNotEmpty) {
-                            await launchUrl(Uri.parse(playStoreUrl), mode: LaunchMode.externalApplication);
-                          }
-                        }
-                      },
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Image.network(p['logo_url'], width: 45, height: 45),
-                      ),
+                    return ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.network(p['logo_url'], width: 45, height: 45),
                     );
                   }).toList(),
                 ),
@@ -269,38 +246,47 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
           ),
         ),
         actions: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          Column(
             children: [
-              if (watchLink.isNotEmpty)
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-                  onPressed: () async {
-                    if (await canLaunchUrl(Uri.parse(watchLink))) {
-                      await launchUrl(Uri.parse(watchLink), mode: LaunchMode.externalApplication);
-                    }
-                  },
-                  icon: const Icon(Icons.play_arrow, color: Colors.white),
-                  label: const Text("보러 가기", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              if (trailerUrl.isNotEmpty)
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, padding: const EdgeInsets.symmetric(vertical: 12)),
+                    onPressed: () async {
+                      final uri = Uri.parse(trailerUrl);
+                      if (await canLaunchUrl(uri)) {
+                        await launchUrl(uri, mode: LaunchMode.externalApplication);
+                      }
+                    },
+                    icon: const Icon(Icons.play_circle_fill, color: Colors.white),
+                    label: const Text("예고편 보러 가기", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  ),
                 ),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.cyan),
+              const SizedBox(height: 10),
+              TextButton(
                 onPressed: () {
                   Navigator.pop(context);
-                  setState(() {
-                    isLoading = true;
-                    isAnalyzing = false;
-                    userResponses.clear();
-                  });
-                  _fetchMoviesFromBackend();
                 },
-                child: const Text("다시 하기", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                child: const Text("다시 하기", style: TextStyle(color: Colors.cyan, fontWeight: FontWeight.bold)),
               ),
             ],
           )
         ],
       ),
-    );
+    ).then((_) {
+      if (mounted) {
+        setState(() {
+          isLoading = true;
+          isImagesLoading = true;
+          isAnalyzing = false;
+          userResponses.clear();
+          // 수정된 부분: 다이얼로그 닫히고 다시 시작할 때 컨트롤러 완전 초기화
+          controller = CardSwiperController();
+        });
+        _fetchMoviesFromBackend();
+      }
+    });
   }
 
   Future<void> _logout(BuildContext context) async {
@@ -315,11 +301,29 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (isLoading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    // 수정된 부분: 데이터 로딩 중이거나 이미지 프리로딩 중일 때 모두 로딩 화면 표시
+    if (isLoading || isImagesLoading) {
+      return const Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(color: Colors.cyanAccent),
+              SizedBox(height: 20),
+              Text(
+                "영화 포스터를 불러오고 있습니다...\n잠시만 기다려주세요! 🎬",
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white70, fontSize: 16, height: 1.5),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
     return PopScope(
       canPop: false,
-      onPopInvoked: (didPop) async {
+      onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
         final shouldExit = await _showExitConfirmation();
         if (shouldExit) SystemNavigator.pop();
@@ -403,7 +407,11 @@ class _MovieSwipeScreenState extends State<MovieSwipeScreen> {
 
   Widget _buildMovieCard(dynamic movie) {
     return Container(
-      decoration: BoxDecoration(borderRadius: BorderRadius.circular(24), image: DecorationImage(image: NetworkImage(movie['poster_url']), fit: BoxFit.cover)),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        // 이미지가 미리 로드되어 있으므로 지연 없이 바로 렌더링됨
+        image: DecorationImage(image: NetworkImage(movie['poster_url']), fit: BoxFit.cover),
+      ),
       child: Container(
         alignment: Alignment.bottomCenter,
         padding: const EdgeInsets.all(20),
