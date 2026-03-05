@@ -3,11 +3,12 @@ import sqlite3
 import httpx
 import random
 import asyncio
-from typing import List, Dict
+from typing import List, Dict, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
+from urllib.parse import quote
 
 load_dotenv()
 
@@ -24,12 +25,10 @@ TMDB_API_KEY = os.getenv("TMDB_API_KEY")
 BASE_URL = "https://api.themoviedb.org/3"
 DB_PATH = "movie_app.db"
 
-# --- DB 초기화 (timeout=5.0 적용 완료) ---
+# --- DB 초기화 ---
 def init_db():
     with sqlite3.connect(DB_PATH, timeout=5.0) as conn:
         cursor = conn.cursor()
-
-        # 1. users 테이블
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,8 +38,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-
-        # 2. watched_history 테이블
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS watched_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,8 +51,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-
-        # 3. recommended_history 테이블
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS recommended_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,13 +85,10 @@ class WatchAction(BaseModel):
 
 @app.post("/login")
 async def login(data: SocialLogin):
-    """소셜 로그인 시 제공자(provider)와 함께 DB에 기록"""
     with sqlite3.connect(DB_PATH, timeout=5.0) as conn:
         cursor = conn.cursor()
-
         cursor.execute("SELECT id FROM users WHERE social_id = ?", (data.user_id,))
         row = cursor.fetchone()
-
         if row:
             user_db_id = row[0]
             cursor.execute("UPDATE users SET age_group = ?, social_provider = ? WHERE id = ?",
@@ -105,9 +97,7 @@ async def login(data: SocialLogin):
             cursor.execute("INSERT INTO users (social_id, social_provider, age_group) VALUES (?, ?, ?)",
                            (data.user_id, data.social_provider, data.age_group))
             user_db_id = cursor.lastrowid
-
         conn.commit()
-
     return {"status": "success", "user_sequence_id": user_db_id, "age_group": data.age_group}
 
 @app.get("/questions/{age_group}")
@@ -127,12 +117,7 @@ async def get_movie_questions(age_group: str):
         }
         response = await client.get(f"{BASE_URL}/discover/movie", params=params)
         results = response.json().get("results", [])
-
-        if len(results) >= 10:
-            movies = random.sample(results, 10)
-        else:
-            movies = results
-
+        movies = random.sample(results, min(len(results), 10))
         return [{
             "movie_id": m["id"],
             "title": m["title"],
@@ -149,8 +134,7 @@ async def analyze_and_recommend(data: List[WatchAction]):
 
     evaluated_movie_ids = {m.movie_id for m in data}
     watched_list = [m for m in data if m.is_watched]
-
-    current_user_id = data[0].user_id if data else "unknown"
+    current_user_id = data[0].user_id
 
     rec_params = {
         "api_key": TMDB_API_KEY,
@@ -165,10 +149,7 @@ async def analyze_and_recommend(data: List[WatchAction]):
     avg_pop, avg_vote = 0.0, 0.0
 
     async with httpx.AsyncClient() as client:
-        if not watched_list:
-            taste_type = "확고한 주관"
-            top_genre = None
-        else:
+        if watched_list:
             genre_counts = {}
             total_pop, total_vote = 0, 0
             for m in watched_list:
@@ -181,104 +162,75 @@ async def analyze_and_recommend(data: List[WatchAction]):
             avg_pop, avg_vote = total_pop / count, total_vote / count
             top_genre = max(genre_counts, key=genre_counts.get) if genre_counts else None
 
-            async def fetch_credits(movie_id):
-                res = await client.get(f"{BASE_URL}/movie/{movie_id}/credits", params={"api_key": TMDB_API_KEY, "language": "ko-KR"})
-                return res.json() if res.status_code == 200 else {}
+            # 감독/배우 분석
+            tasks = [client.get(f"{BASE_URL}/movie/{m.movie_id}/credits", params={"api_key": TMDB_API_KEY}) for m in watched_list]
+            credits_responses = await asyncio.gather(*tasks)
 
-            tasks = [fetch_credits(m.movie_id) for m in watched_list]
-            credits_data = await asyncio.gather(*tasks)
+            actor_counts, director_counts = {}, {}
+            for res in credits_responses:
+                if res.status_code == 200:
+                    c_data = res.json()
+                    for cast in c_data.get("cast", [])[:5]:
+                        actor_counts[cast["id"]] = actor_counts.get(cast["id"], {"count": 0, "name": cast["name"]})
+                        actor_counts[cast["id"]]["count"] += 1
+                    for crew in c_data.get("crew", []):
+                        if crew["job"] == "Director":
+                            director_counts[crew["id"]] = director_counts.get(crew["id"], {"count": 0, "name": crew["name"]})
+                            director_counts[crew["id"]]["count"] += 1
 
-            actor_counts = {}
-            director_counts = {}
-
-            for credits in credits_data:
-                for cast in credits.get("cast", [])[:5]:
-                    a_id = cast["id"]
-                    actor_counts[a_id] = actor_counts.get(a_id, {"count": 0, "name": cast["name"]})
-                    actor_counts[a_id]["count"] += 1
-
-                for crew in credits.get("crew", []):
-                    if crew["job"] == "Director":
-                        d_id = crew["id"]
-                        director_counts[d_id] = director_counts.get(d_id, {"count": 0, "name": crew["name"]})
-                        director_counts[d_id]["count"] += 1
-
-            top_actor = max(actor_counts.values(), key=lambda x: x["count"], default={"count": 0}) if actor_counts else {"count": 0}
-            top_director = max(director_counts.values(), key=lambda x: x["count"], default={"count": 0}) if director_counts else {"count": 0}
-
-            top_actor_id = max(actor_counts, key=lambda k: actor_counts[k]["count"]) if actor_counts else None
-            top_director_id = max(director_counts, key=lambda k: director_counts[k]["count"]) if director_counts else None
+            top_actor = max(actor_counts.values(), key=lambda x: x["count"], default={"count": 0})
+            top_director = max(director_counts.values(), key=lambda x: x["count"], default={"count": 0})
 
             if top_director["count"] >= 2:
                 taste_type = f"'{top_director['name']}' 감독 마니아"
-                rec_params["with_crew"] = top_director_id
-                rec_params["vote_average.gte"] = 7.0
+                rec_params["with_crew"] = max(director_counts, key=lambda k: director_counts[k]["count"])
             elif top_actor["count"] >= 2:
                 taste_type = f"'{top_actor['name']}' 배우 팬"
-                rec_params["with_cast"] = top_actor_id
-                rec_params["vote_average.gte"] = 7.0
+                rec_params["with_cast"] = max(actor_counts, key=lambda k: actor_counts[k]["count"])
             elif top_genre:
                 rec_params["with_genres"] = top_genre
 
+        # 추천 영화 가져오기
         res = await client.get(f"{BASE_URL}/discover/movie", params=rec_params)
         results = res.json().get("results", [])
-
         filtered = [m for m in results if m["id"] not in evaluated_movie_ids]
 
-        if not filtered and ("with_cast" in rec_params or "with_crew" in rec_params):
-            rec_params.pop("with_cast", None)
-            rec_params.pop("with_crew", None)
-            rec_params["vote_average.gte"] = 8.0
-            if top_genre: rec_params["with_genres"] = top_genre
+        final_movie = random.choice(filtered[:15]) if filtered else (results[0] if results else None)
+        if not final_movie:
+            raise HTTPException(status_code=404, detail="추천 영화 없음")
 
-            res = await client.get(f"{BASE_URL}/discover/movie", params=rec_params)
-            results = res.json().get("results", [])
-            filtered = [m for m in results if m["id"] not in evaluated_movie_ids]
-            taste_type = "선호 장르 명작"
+        # --- [수정] 유튜브 예고편 가져오기 로직 ---
+        trailer_url = ""
+        video_res = await client.get(f"{BASE_URL}/movie/{final_movie['id']}/videos", params={"api_key": TMDB_API_KEY, "language": "ko-KR"})
+        video_data = video_res.json().get("results", [])
+        if not video_data: # 한국어 예고편 없으면 영어 검색
+            video_res = await client.get(f"{BASE_URL}/movie/{final_movie['id']}/videos", params={"api_key": TMDB_API_KEY})
+            video_data = video_res.json().get("results", [])
 
-        if filtered:
-            final_movie = random.choice(filtered[:15])
-        else:
-            final_movie = results[0] if results else None
+        for v in video_data:
+            if v.get("site") == "YouTube" and v.get("type") in ["Trailer", "Teaser"]:
+                trailer_url = f"https://www.youtube.com/watch?v={v['key']}"
+                break
 
-    if not final_movie:
-        raise HTTPException(status_code=404, detail="추천 영화를 찾을 수 없습니다.")
-
-    # --- OTT(스트리밍) 제공자 정보 가져오기 ---
-    providers_list = []
-    watch_link = ""
-    async with httpx.AsyncClient() as client:
+        # --- OTT 정보 (단순 확인용) ---
+        providers_list = []
         prov_res = await client.get(f"{BASE_URL}/movie/{final_movie['id']}/watch/providers", params={"api_key": TMDB_API_KEY})
         if prov_res.status_code == 200:
-            kr_data = prov_res.json().get("results", {}).get("KR", {})
-            watch_link = kr_data.get("link", "") # TMDB 자체 OTT 안내 링크
-
-            # 정액제(스트리밍) 서비스 리스트 추출 (넷플릭스, 왓챠, 디즈니+ 등)
-            for p in kr_data.get("flatrate", []):
+            kr_prov = prov_res.json().get("results", {}).get("KR", {}).get("flatrate", [])
+            for p in kr_prov:
                 providers_list.append({
                     "name": p.get("provider_name"),
                     "logo_url": f"https://image.tmdb.org/t/p/original{p.get('logo_path')}"
                 })
 
-    # --- 업데이트된 DB 기록 로직 (timeout=5.0 적용) ---
+    # DB 기록
     with sqlite3.connect(DB_PATH, timeout=5.0) as conn:
         cursor = conn.cursor()
-
-        # 1. 평가(질문)로 쓰인 영화들 저장 (history_genre_ids 사용)
         for m in data:
-            cursor.execute('''
-                INSERT INTO watched_history 
-                (user_id, movie_id, title, history_genre_ids, popularity, vote_average, is_watched) 
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (current_user_id, m.movie_id, m.title, str(m.genre_ids), m.popularity, m.vote_average, m.is_watched))
-
-        # 2. 최종 추천된 영화 결과 저장 (recommended_history 테이블 & recommended_genre_ids 사용)
-        cursor.execute('''
-            INSERT INTO recommended_history 
-            (user_id, taste_type, recommended_genre_ids, recommended_movie_id, recommended_movie_title) 
-            VALUES (?, ?, ?, ?, ?)
-        ''', (current_user_id, taste_type, str(final_movie.get("genre_ids", [])), final_movie["id"], final_movie["title"]))
-
+            cursor.execute("INSERT INTO watched_history (user_id, movie_id, title, history_genre_ids, popularity, vote_average, is_watched) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                           (current_user_id, m.movie_id, m.title, str(m.genre_ids), m.popularity, m.vote_average, m.is_watched))
+        cursor.execute("INSERT INTO recommended_history (user_id, taste_type, recommended_genre_ids, recommended_movie_id, recommended_movie_title) VALUES (?, ?, ?, ?, ?)",
+                       (current_user_id, taste_type, str(final_movie.get("genre_ids", [])), final_movie["id"], final_movie["title"]))
         conn.commit()
 
     return {
@@ -289,7 +241,7 @@ async def analyze_and_recommend(data: List[WatchAction]):
             "release_date": final_movie.get("release_date", "미정"),
             "poster_url": f"https://image.tmdb.org/t/p/w500{final_movie['poster_path']}" if final_movie.get('poster_path') else "",
             "providers": providers_list,
-            "watch_link": watch_link
+            "trailer_url": trailer_url
         }
     }
 

@@ -47,19 +47,9 @@
             <data android:mimeType="text/plain"/>
         </intent>
 
-        <package android:name="com.netflix.mediaclient" />
-        <package android:name="com.frograms.watcha" />
-        <package android:name="net.cj.cjhv.gs.tving" />
-        <package android:name="kr.co.captv.pooqV2" />
-        <package android:name="com.disney.disneyplus" />
-        <package android:name="com.amazon.avod.thirdpartyclient" />
-
-        <intent><action android:name="android.intent.action.VIEW" /><data android:scheme="nflx" /></intent>
-        <intent><action android:name="android.intent.action.VIEW" /><data android:scheme="watchaplay" /></intent>
-        <intent><action android:name="android.intent.action.VIEW" /><data android:scheme="tving" /></intent>
-        <intent><action android:name="android.intent.action.VIEW" /><data android:scheme="wavve" /></intent>
-        <intent><action android:name="android.intent.action.VIEW" /><data android:scheme="disneyplus" /></intent>
-        <intent><action android:name="android.intent.action.VIEW" /><data android:scheme="primevideo" /></intent>
-        <intent><action android:name="android.intent.action.VIEW" /><data android:scheme="https" /></intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
     </queries>
 </manifest>
